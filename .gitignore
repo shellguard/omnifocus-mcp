@@ -8,3 +8,6 @@ DerivedData/
 .netrc
 .pkgroot/
 dist/
+.cache/
+.tmp/
+.swiftpm-cache/
