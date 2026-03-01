@@ -1,0 +1,11 @@
+{
+  "name": "omnifocus",
+  "description": "OmniFocus integration for Cowork — capture tasks, review your workload, and manage projects directly from Claude.",
+  "version": "0.2.0",
+  "author": {
+    "name": "shellguard",
+    "url": "https://github.com/shellguard/omnifocus-mcp"
+  },
+  "homepage": "https://github.com/shellguard/omnifocus-mcp",
+  "repository": "https://github.com/shellguard/omnifocus-mcp"
+}

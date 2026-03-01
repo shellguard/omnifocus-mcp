@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "omnifocus": {
+      "type": "stdio",
+      "command": "/usr/local/bin/omnifocus-mcp",
+      "args": [],
+      "env": {
+        "OF_APP_PATH": "/Applications/OmniFocus.app"
+      }
+    }
+  }
+}
