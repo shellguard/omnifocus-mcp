@@ -9,6 +9,21 @@ A Swift-based MCP server for OmniFocus 4 using Omni Automation (evaluate javascr
 - Automation permission to control OmniFocus (System Settings > Privacy & Security > Automation)
 - OmniFocus setting: Automation > Accept scripts from external applications
 
+## Install
+
+Build and install to `/usr/local/bin` in one step:
+
+```bash
+./scripts/install.sh
+```
+
+Optional flags / env vars:
+
+- `--prefix /path` — install under a different prefix (default `/usr/local`)
+- `INSTALL_PREFIX=/path ./scripts/install.sh` — same via env
+
+The script checks for Swift and OmniFocus, builds a release binary, copies it to `<prefix>/bin/omnifocus-mcp` (prompting for `sudo` if needed), and prints MCP client config snippets.
+
 ## Build
 
 ```bash
