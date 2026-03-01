@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:omnifocus-mcp}",
+            "name": "Debug omnifocus-mcp",
+            "target": "omnifocus-mcp",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug omnifocus-mcp"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:omnifocus-mcp}",
+            "name": "Release omnifocus-mcp",
+            "target": "omnifocus-mcp",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release omnifocus-mcp"
+        }
+    ]
+}
