@@ -32,6 +32,17 @@ swift build -c release
 
 The binary will be at `./.build/release/omnifocus-mcp`.
 
+## Test
+
+Run integration tests against the built binary (no OmniFocus required):
+
+```bash
+./scripts/test.sh            # build then test
+./scripts/test.sh --no-build # skip build, use existing binary
+```
+
+Tests cover MCP protocol compliance (initialize, tools/list, tools/call error handling), JSON-RPC error codes, response format, tool catalogue, descriptions, and the `OF_APP_PATH` injection guard. The tools/call content format test is skipped automatically when OmniFocus is not running.
+
 ## Package (pkg)
 
 Build an unsigned installer package:
