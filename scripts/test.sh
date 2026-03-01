@@ -43,7 +43,7 @@ rpc() {
   printf '%s\n' "$1" | OF_BACKEND=jxa "$BINARY" 2>/dev/null
 }
 
-# Assert that output contains a substring
+# Assert output contains an exact substring
 assert_contains() {
   local label="$1" output="$2" needle="$3"
   if printf '%s' "$output" | grep -qF -- "$needle"; then
@@ -54,7 +54,7 @@ assert_contains() {
   fi
 }
 
-# Assert that output does NOT contain a substring
+# Assert output does NOT contain an exact substring
 assert_not_contains() {
   local label="$1" output="$2" needle="$3"
   if printf '%s' "$output" | grep -qF -- "$needle"; then
@@ -62,18 +62,6 @@ assert_not_contains() {
     printf '    output: %s\n' "$output"
   else
     pass "$label"
-  fi
-}
-
-# Extract a value from JSON output using jq (if available) or grep+sed
-json_get() {
-  local json="$1" key="$2"
-  if command -v jq > /dev/null 2>&1; then
-    printf '%s' "$json" | jq -r "$key" 2>/dev/null
-  else
-    # naive grep fallback — good enough for simple string values
-    printf '%s' "$json" | grep -oE "\"${key#.}\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" \
-      | sed 's/.*: *"//' | tr -d '"'
   fi
 }
 
@@ -89,6 +77,12 @@ if [ ! -x "$BINARY" ]; then
   exit 1
 fi
 
+# Detect whether OmniFocus is running (used to gate tests that need it)
+OMNIFOCUS_RUNNING=false
+if pgrep -xq OmniFocus 2>/dev/null; then
+  OMNIFOCUS_RUNNING=true
+fi
+
 # ── Test suite ────────────────────────────────────────────────────────────────
 
 # ─── 1. initialize ────────────────────────────────────────────────────────────
@@ -97,13 +91,19 @@ header "1. initialize"
 INIT_MSG='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"0"}}}'
 INIT_OUT=$(rpc "$INIT_MSG")
 
-assert_contains "returns jsonrpc 2.0"         "$INIT_OUT" '"jsonrpc":"2.0"'
-assert_contains "returns id 1"                "$INIT_OUT" '"id":1'
-assert_contains "has result field"            "$INIT_OUT" '"result"'
-assert_contains "protocolVersion 2024-11-05"  "$INIT_OUT" '"protocolVersion":"2024-11-05"'
-assert_contains "serverInfo name"             "$INIT_OUT" '"name":"omnifocus-mcp"'
-assert_contains "serverInfo version is 0.2.0" "$INIT_OUT" '"version":"0.2.0"'
-assert_not_contains "no error field"          "$INIT_OUT" '"error"'
+assert_contains     "returns jsonrpc 2.0"          "$INIT_OUT" '"jsonrpc":"2.0"'
+# id echo: check for id:1 bounded by non-digit to avoid matching id:10, id:12, etc.
+if printf '%s' "$INIT_OUT" | grep -qE '"id"[[:space:]]*:[[:space:]]*1[^0-9]'; then
+  pass "returns id 1 (exact)"
+else
+  fail "returns id 1 (exact)" "expected id:1 in: $INIT_OUT"
+fi
+assert_contains     "has result field"             "$INIT_OUT" '"result":'
+assert_not_contains "no error field"               "$INIT_OUT" '"error":'
+assert_contains     "protocolVersion 2024-11-05"   "$INIT_OUT" '"protocolVersion":"2024-11-05"'
+assert_contains     "capabilities field present"   "$INIT_OUT" '"capabilities":'
+assert_contains     "serverInfo name"              "$INIT_OUT" '"name":"omnifocus-mcp"'
+assert_contains     "serverInfo version is 0.2.0"  "$INIT_OUT" '"version":"0.2.0"'
 
 # ─── 2. tools/list ────────────────────────────────────────────────────────────
 header "2. tools/list"
@@ -111,11 +111,12 @@ header "2. tools/list"
 LIST_MSG='{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
 LIST_OUT=$(rpc "$LIST_MSG")
 
-assert_contains "returns result"         "$LIST_OUT" '"result"'
-assert_contains "has tools array"        "$LIST_OUT" '"tools"'
-assert_not_contains "no error"           "$LIST_OUT" '"error"'
+assert_contains     "returns result"   "$LIST_OUT" '"result":'
+assert_contains     "has tools array"  "$LIST_OUT" '"tools"'
+assert_not_contains "no error"         "$LIST_OUT" '"error":'
 
-# Count tool entries by counting name occurrences
+# Count tool entries — count "name":"omnifocus_ occurrences inside "tools" list.
+# Each tool definition has exactly one name key starting with omnifocus_.
 TOOL_COUNT=$(printf '%s' "$LIST_OUT" | grep -oF '"name":"omnifocus_' | wc -l | tr -d ' ')
 if [ "$TOOL_COUNT" -eq 51 ]; then
   pass "exactly 51 tools returned (got $TOOL_COUNT)"
@@ -123,20 +124,27 @@ else
   fail "tool count" "expected 51, got $TOOL_COUNT"
 fi
 
-# Spot-check a selection of tools are present
+# Verify ALL 51 tool names are present
 for tool in \
-  omnifocus_list_tasks omnifocus_create_task omnifocus_update_task \
-  omnifocus_complete_task omnifocus_delete_task \
-  omnifocus_list_projects omnifocus_create_project \
-  omnifocus_list_inbox omnifocus_process_inbox \
-  omnifocus_get_task_counts omnifocus_get_project_counts omnifocus_get_forecast \
-  omnifocus_create_tasks_batch omnifocus_delete_tasks_batch omnifocus_move_tasks_batch \
+  omnifocus_list_tasks omnifocus_list_inbox omnifocus_list_projects \
+  omnifocus_list_tags omnifocus_list_perspectives omnifocus_list_folders \
+  omnifocus_create_folder omnifocus_move_project \
+  omnifocus_list_flagged omnifocus_list_overdue omnifocus_list_available \
+  omnifocus_search_tasks omnifocus_list_task_children omnifocus_get_task_parent \
+  omnifocus_process_inbox omnifocus_set_project_sequential omnifocus_eval_automation \
+  omnifocus_get_task omnifocus_get_project omnifocus_get_tag \
+  omnifocus_create_task omnifocus_create_project omnifocus_create_tag \
+  omnifocus_update_task omnifocus_update_project omnifocus_update_tag \
+  omnifocus_complete_task omnifocus_complete_project \
+  omnifocus_delete_task omnifocus_delete_project omnifocus_delete_tag \
   omnifocus_uncomplete_task omnifocus_uncomplete_project \
-  omnifocus_set_project_status omnifocus_append_to_note \
+  omnifocus_append_to_note omnifocus_search_tags omnifocus_set_project_status \
   omnifocus_get_folder omnifocus_update_folder omnifocus_delete_folder \
+  omnifocus_get_task_counts omnifocus_get_project_counts omnifocus_get_forecast \
   omnifocus_create_subtask omnifocus_duplicate_task \
-  omnifocus_list_notifications omnifocus_add_notification omnifocus_remove_notification \
-  omnifocus_set_task_repetition omnifocus_eval_automation; do
+  omnifocus_create_tasks_batch omnifocus_delete_tasks_batch omnifocus_move_tasks_batch \
+  omnifocus_list_notifications omnifocus_add_notification \
+  omnifocus_remove_notification omnifocus_set_task_repetition; do
   assert_contains "tool present: $tool" "$LIST_OUT" "\"$tool\""
 done
 
@@ -152,77 +160,139 @@ assert_contains "delete_folder warns about cascade" \
 # ─── 4. tools/call — error cases (no OmniFocus needed) ───────────────────────
 header "4. tools/call error handling"
 
-# Unknown tool
+# Unknown tool → -32602 (toolNotFound, caught before any script is run)
 UNKNOWN_OUT=$(rpc '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"omnifocus_nonexistent","arguments":{}}}')
-assert_contains "unknown tool returns error"       "$UNKNOWN_OUT" '"error"'
-assert_contains "unknown tool code -32602"         "$UNKNOWN_OUT" '-32602'
-assert_not_contains "unknown tool has no result"   "$UNKNOWN_OUT" '"result"'
+assert_contains     "unknown tool returns error"     "$UNKNOWN_OUT" '"error":'
+assert_contains     "unknown tool code -32602"       "$UNKNOWN_OUT" '-32602'
+assert_not_contains "unknown tool has no result"     "$UNKNOWN_OUT" '"result":'
 
-# Missing tool name in params
+# Missing tool name in params → -32602
 MISSING_NAME_OUT=$(rpc '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{}}')
-assert_contains "missing tool name returns error"  "$MISSING_NAME_OUT" '"error"'
-assert_contains "missing tool name code -32602"    "$MISSING_NAME_OUT" '-32602'
+assert_contains "missing tool name returns error"    "$MISSING_NAME_OUT" '"error":'
+assert_contains "missing tool name code -32602"      "$MISSING_NAME_OUT" '-32602'
 
-# ─── 5. JSON-RPC error protocol ───────────────────────────────────────────────
+# ─── 5. JSON-RPC protocol errors ──────────────────────────────────────────────
 header "5. JSON-RPC protocol errors"
 
-# Unknown method
+# Unknown method → -32601
 UNKNOWN_METHOD_OUT=$(rpc '{"jsonrpc":"2.0","id":5,"method":"no/such/method","params":{}}')
-assert_contains "unknown method returns error" "$UNKNOWN_METHOD_OUT" '"error"'
-assert_contains "unknown method code -32601"   "$UNKNOWN_METHOD_OUT" '-32601'
+assert_contains "unknown method returns error"       "$UNKNOWN_METHOD_OUT" '"error":'
+assert_contains "unknown method code -32601"         "$UNKNOWN_METHOD_OUT" '-32601'
 
-# Parse error (malformed JSON)
+# Parse error (malformed JSON) → -32700
 PARSE_ERR_OUT=$(printf 'not json at all\n' | OF_BACKEND=jxa "$BINARY" 2>/dev/null)
 assert_contains "malformed JSON returns parse error" "$PARSE_ERR_OUT" '-32700'
 
-# Not an object (array is valid JSON but not a JSON-RPC object → -32600)
+# Non-object (array is valid JSON but not a JSON-RPC message) → -32600
 NOT_OBJ_OUT=$(rpc '[1,2,3]')
 assert_contains "non-object returns invalid request" "$NOT_OBJ_OUT" '-32600'
 
-# ─── 6. tools/call response format (MCP spec compliance) ─────────────────────
-header "6. tools/call response format"
+# ─── 6. Tool dispatch coverage ────────────────────────────────────────────────
+# Every tool listed in tools/list must also have a case in callTool().
+# Without OmniFocus running the script will fail (-32000), but a missing
+# case would produce toolNotFound (-32602) instead.  This catches tools that
+# are registered in the tools array but have no dispatch entry.
+header "6. Tool dispatch coverage"
 
-# notifications/initialized is a no-op, use it to test basic notification flow;
-# instead call a tool that will fail with a script error (OmniFocus absent) —
-# the response still exercises the content-formatting path.
-# We verify the content type field using a tool that always errors gracefully.
-CALL_OUT=$(rpc '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"omnifocus_list_tasks","arguments":{}}}' 2>/dev/null || true)
+dispatch_check() {
+  local tool="$1"
+  local out
+  out=$(rpc "{\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"tools/call\",\"params\":{\"name\":\"$tool\",\"arguments\":{}}}")
+  # A missing dispatch case produces "Unknown tool: <name>" (-32602).
+  # -32602 for a missing *required argument* has a different message, so we
+  # check the message text rather than just the error code.
+  if printf '%s' "$out" | grep -qF -- "Unknown tool:"; then
+    fail "dispatch: $tool" "got 'Unknown tool' — missing case in callTool()"
+    printf '    output: %s\n' "$out"
+  else
+    pass "dispatch: $tool"
+  fi
+}
 
-if printf '%s' "$CALL_OUT" | grep -qF '"type":"text"'; then
-  pass "tools/call content uses type:text"
-elif printf '%s' "$CALL_OUT" | grep -qF '"error"'; then
-  # Script failed (OmniFocus not running), but check it didn't use the old type
-  assert_not_contains "no legacy type:json in error path" "$CALL_OUT" '"type":"json"'
-  skip "tools/call content format (OmniFocus not running — cannot verify text content)"
+for tool in \
+  omnifocus_list_tasks omnifocus_list_inbox omnifocus_list_projects \
+  omnifocus_list_tags omnifocus_list_perspectives omnifocus_list_folders \
+  omnifocus_create_folder omnifocus_move_project \
+  omnifocus_list_flagged omnifocus_list_overdue omnifocus_list_available \
+  omnifocus_search_tasks omnifocus_list_task_children omnifocus_get_task_parent \
+  omnifocus_process_inbox omnifocus_set_project_sequential omnifocus_eval_automation \
+  omnifocus_get_task omnifocus_get_project omnifocus_get_tag \
+  omnifocus_create_task omnifocus_create_project omnifocus_create_tag \
+  omnifocus_update_task omnifocus_update_project omnifocus_update_tag \
+  omnifocus_complete_task omnifocus_complete_project \
+  omnifocus_delete_task omnifocus_delete_project omnifocus_delete_tag \
+  omnifocus_uncomplete_task omnifocus_uncomplete_project \
+  omnifocus_append_to_note omnifocus_search_tags omnifocus_set_project_status \
+  omnifocus_get_folder omnifocus_update_folder omnifocus_delete_folder \
+  omnifocus_get_task_counts omnifocus_get_project_counts omnifocus_get_forecast \
+  omnifocus_create_subtask omnifocus_duplicate_task \
+  omnifocus_create_tasks_batch omnifocus_delete_tasks_batch omnifocus_move_tasks_batch \
+  omnifocus_list_notifications omnifocus_add_notification \
+  omnifocus_remove_notification omnifocus_set_task_repetition; do
+  dispatch_check "$tool"
+done
+
+# ─── 7. tools/call response format (MCP spec compliance) ─────────────────────
+header "7. tools/call response format"
+
+if [ "$OMNIFOCUS_RUNNING" = true ]; then
+  # Use eval_automation with a trivial script that always succeeds,
+  # giving us a real tools/call success response to check the content format.
+  CALL_OUT=$(printf '%s\n' \
+    '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"omnifocus_eval_automation","arguments":{"script":"JSON.stringify({ok:true})","parseJson":true}}}' \
+    | OF_BACKEND=automation "$BINARY" 2>/dev/null || true)
+  if printf '%s' "$CALL_OUT" | grep -qF -- '"type":"text"'; then
+    pass "tools/call success response uses type:text"
+    assert_not_contains "no legacy type:json in success response" "$CALL_OUT" '"type":"json"'
+  else
+    fail "tools/call success response format" "expected type:text, got: $CALL_OUT"
+  fi
 else
-  fail "tools/call content format" "expected type:text or error, got: $CALL_OUT"
+  skip "tools/call success content format (OmniFocus not running)"
+  # In the error path, verify the old non-spec type:json is never emitted
+  ERR_CALL_OUT=$(rpc '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"omnifocus_list_tasks","arguments":{}}}' || true)
+  assert_not_contains "no legacy type:json in any response" "$ERR_CALL_OUT" '"type":"json"'
 fi
 
-# ─── 7. initialized / shutdown notifications (no response expected) ───────────
-header "7. Notification messages (no response)"
+# ─── 8. Notification messages (no response expected) ──────────────────────────
+header "8. Notification messages (no response)"
 
-# These must produce no output
-NOTIF_OUT=$(printf '%s\n%s\n' \
+# Send initialize + notifications together; only the initialize should respond.
+MIXED_OUT=$(printf '%s\n%s\n%s\n' \
+  '{"jsonrpc":"2.0","id":20,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"0"}}}' \
   '{"jsonrpc":"2.0","method":"initialized"}' \
   '{"jsonrpc":"2.0","method":"shutdown"}' \
   | OF_BACKEND=jxa "$BINARY" 2>/dev/null)
 
-if [ -z "$NOTIF_OUT" ]; then
-  pass "initialized/shutdown produce no response"
+# The initialize must respond (proves binary was alive and processed input)
+assert_contains "initialize response present in mixed batch" "$MIXED_OUT" '"id":20'
+
+# There must be exactly one response line (only initialize, not initialized/shutdown)
+RESPONSE_COUNT=$(printf '%s\n' "$MIXED_OUT" | grep -c '"jsonrpc"' || true)
+if [ "$RESPONSE_COUNT" -eq 1 ]; then
+  pass "exactly one response (notifications produce no output)"
 else
-  fail "initialized/shutdown should produce no response" "got: $NOTIF_OUT"
+  fail "notification response count" "expected 1 response, got $RESPONSE_COUNT"
+  printf '    output: %s\n' "$MIXED_OUT"
 fi
 
-# ─── 8. OF_APP_PATH injection guard ──────────────────────────────────────────
-header "8. OF_APP_PATH injection guard"
+# ─── 9. OF_APP_PATH injection guard ──────────────────────────────────────────
+header "9. OF_APP_PATH injection guard"
 
+# Confirm a legitimate path is not rejected (guard only fires on unsafe chars)
+SAFE_PATH_OUT=$(printf '%s\n' \
+  '{"jsonrpc":"2.0","id":30,"method":"tools/call","params":{"name":"omnifocus_list_tasks","arguments":{}}}' \
+  | OF_BACKEND=automation OF_APP_PATH='/Applications/OmniFocus.app' \
+    "$BINARY" 2>/dev/null || true)
+assert_not_contains "safe OF_APP_PATH is not rejected by guard" "$SAFE_PATH_OUT" "unsafe characters"
+
+# An injection payload must be caught by the allowlist guard specifically
 INJECT_OUT=$(printf '%s\n' \
-  '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"omnifocus_list_tasks","arguments":{}}}' \
+  '{"jsonrpc":"2.0","id":31,"method":"tools/call","params":{"name":"omnifocus_list_tasks","arguments":{}}}' \
   | OF_BACKEND=automation OF_APP_PATH='/Applications/OmniFocus.app"; do shell script "id"' \
     "$BINARY" 2>/dev/null || true)
-
-assert_contains "unsafe OF_APP_PATH is rejected" "$INJECT_OUT" '"error"'
-assert_contains "error mentions unsafe characters" "$INJECT_OUT" "unsafe characters"
+assert_contains     "unsafe OF_APP_PATH is rejected"      "$INJECT_OUT" '"error":'
+assert_contains     "error cites unsafe characters"       "$INJECT_OUT" "unsafe characters"
 
 # ─── Summary ──────────────────────────────────────────────────────────────────
 printf "\n${BOLD}Results: %d passed, %d failed${NC}\n" "$PASS" "$FAIL"
