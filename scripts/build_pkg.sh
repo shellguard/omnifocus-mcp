@@ -4,7 +4,7 @@ set -eu
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 BIN_NAME="omnifocus-mcp"
 BUILD_CONFIG="${BUILD_CONFIG:-release}"
-VERSION="${PKG_VERSION:-0.1.0}"
+VERSION="${PKG_VERSION:-0.2.0}"
 IDENTIFIER="${PKG_IDENTIFIER:-com.omnifocus-mcp.cli}"
 INSTALL_LOCATION="${PKG_INSTALL_LOCATION:-/usr/local/bin}"
 PKG_ROOT="$ROOT_DIR/.pkgroot"
