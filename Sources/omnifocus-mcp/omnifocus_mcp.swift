@@ -632,13 +632,11 @@ function moveProject(params) {
       throw new Error('Folder not found');
     }
   }
+  var app = getApp();
   if (target) {
-    if (!safeSet(project, 'containingFolder', target)) {
-      safeSet(project, 'folder', target);
-    }
+    app.move(project, {to: target.projects.end});
   } else {
-    safeSet(project, 'containingFolder', null);
-    safeSet(project, 'folder', null);
+    app.move(project, {to: doc.projects.end});
   }
   return projectToJSON(project);
 }
@@ -816,7 +814,8 @@ function createProject(params) {
     properties.deferDate = deferDate;
   }
 
-  var project = doc.make({new: 'project', withProperties: properties});
+  var app = getApp();
+  var project = app.make({new: 'project', withProperties: properties, at: doc.projects.end});
   return projectToJSON(project);
 }
 
@@ -1158,7 +1157,7 @@ function setProjectStatus(params) {
   var doc = getDocument();
   var project = findProjectById(doc, params.id);
   if (!project) { throw new Error('Project not found'); }
-  var statusMap = {'active': 'active project', 'on_hold': 'on hold', 'dropped': 'dropped'};
+  var statusMap = {'active': 'active', 'on_hold': 'on hold', 'dropped': 'dropped'};
   var jxaStatus = statusMap[params.status];
   if (!jxaStatus) { throw new Error('Invalid status: ' + params.status); }
   try {
@@ -2470,12 +2469,9 @@ private let omniAutomationScript = #"""
       }
     }
     if (target) {
-      if (!safeSet(project, 'containingFolder', target)) {
-        safeSet(project, 'folder', target);
-      }
+      moveSections([project], target.ending);
     } else {
-      safeSet(project, 'containingFolder', null);
-      safeSet(project, 'folder', null);
+      moveSections([project], document.ending);
     }
     return projectToJSON(project);
   }
@@ -4096,11 +4092,11 @@ private final class MCPServer {
         do {
             jsonObject = try JSONSerialization.jsonObject(with: Data(line.utf8), options: [])
         } catch {
-            sendError(id: NSNull(), code: -32700, message: "Parse error", data: error.localizedDescription)
+            sendError(id: nil, code: -32700, message: "Parse error", data: error.localizedDescription)
             return
         }
         guard let message = jsonObject as? [String: Any] else {
-            sendError(id: NSNull(), code: -32600, message: "Invalid Request", data: "Message is not an object")
+            sendError(id: nil, code: -32600, message: "Invalid Request", data: "Message is not an object")
             return
         }
         do {
@@ -4492,7 +4488,7 @@ private final class MCPServer {
         if let cached = automationBackendAvailable {
             return cached
         }
-        let probe = "JSON.stringify({hasDatabase: (typeof database !== 'undefined') || (typeof document !== 'undefined' && document && typeof document.database !== 'undefined')})"
+        let probe = "JSON.stringify({hasDatabase: (typeof database !== 'undefined') || (typeof document !== 'undefined' && document && typeof document.database !== 'undefined') || (typeof flattenedProjects !== 'undefined') || (typeof moveSections !== 'undefined')})"
         if let result = try? runOmniAutomationScript(probe, parseJson: true),
            let dict = result as? [String: Any],
            let hasDatabase = dict["hasDatabase"] as? Bool {
@@ -4516,14 +4512,11 @@ private final class MCPServer {
     }
 
     private func sendError(id: Any?, code: Int, message: String, data: Any? = nil) {
-        let errorObject: [String: Any] = [
-            "code": code,
-            "message": message,
-            "data": data ?? NSNull()
-        ]
+        var errorObject: [String: Any] = ["code": code, "message": message]
+        if let data = data { errorObject["data"] = data }
         let response: [String: Any] = [
             "jsonrpc": "2.0",
-            "id": id ?? NSNull(),
+            "id": id ?? 0,
             "error": errorObject
         ]
         send(response)
