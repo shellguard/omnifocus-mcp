@@ -1978,6 +1978,25 @@ private let omniAutomationScript = #"""
     }
   }
 
+  function collectFromLibrary(targetCtor, result, seen) {
+    try {
+      if (typeof library === 'undefined') { return; }
+      function recurse(container) {
+        for (var i = 0; i < container.length; i++) {
+          var item = container[i];
+          if (!item) { continue; }
+          var ctor = item.constructor ? item.constructor.name : '';
+          if (ctor === targetCtor) {
+            var key = idValue(item) || safeCall(item, 'name') || String(result.length);
+            if (!seen[key]) { seen[key] = true; result.push(item); }
+          }
+          try { recurse(item); } catch (e) {}
+        }
+      }
+      recurse(library);
+    } catch (e) {}
+  }
+
   function allFolders(doc) {
     var flattened = firstValue(doc, ['flattenedFolders', 'folders']);
     var list = arrayify(flattened);
@@ -1985,7 +2004,9 @@ private let omniAutomationScript = #"""
       return list;
     }
     var result = [];
-    collectFoldersFrom(doc, result, {});
+    var seen = {};
+    collectFoldersFrom(doc, result, seen);
+    collectFromLibrary('Folder', result, seen);
     return result;
   }
 
@@ -2000,6 +2021,7 @@ private let omniAutomationScript = #"""
   }
 
   function findFolderById(doc, id) {
+    try { if (typeof Folder !== 'undefined' && typeof Folder.byIdentifier === 'function') { var f = Folder.byIdentifier(id); if (f) { return f; } } } catch (e) {}
     var folders = allFolders(doc);
     for (var i = 0; i < folders.length; i++) {
       if (idValue(folders[i]) === id) {
@@ -2020,6 +2042,7 @@ private let omniAutomationScript = #"""
   }
 
   function findProjectById(doc, id) {
+    try { if (typeof Project !== 'undefined' && typeof Project.byIdentifier === 'function') { var p = Project.byIdentifier(id); if (p) { return p; } } } catch (e) {}
     var projects = allProjects(doc);
     for (var i = 0; i < projects.length; i++) {
       if (idValue(projects[i]) === id) {
@@ -2052,7 +2075,9 @@ private let omniAutomationScript = #"""
       return list;
     }
     var result = [];
-    collectProjectsFrom(doc, result, {});
+    var seen = {};
+    collectProjectsFrom(doc, result, seen);
+    collectFromLibrary('Project', result, seen);
     return result;
   }
 
@@ -2067,6 +2092,7 @@ private let omniAutomationScript = #"""
   }
 
   function findTagById(doc, id) {
+    try { if (typeof Tag !== 'undefined' && typeof Tag.byIdentifier === 'function') { var tg = Tag.byIdentifier(id); if (tg) { return tg; } } } catch (e) {}
     var tags = arrayify(firstValue(doc, ['flattenedTags', 'tags', 'contexts']));
     for (var i = 0; i < tags.length; i++) {
       if (idValue(tags[i]) === id) {
@@ -2078,7 +2104,7 @@ private let omniAutomationScript = #"""
 
   function makeTag(doc, name, active) {
     var tag = null;
-    if (typeof Tag === 'function') {
+    if (typeof Tag !== 'undefined') {
       try {
         tag = new Tag(name);
       } catch (e) {
@@ -2129,6 +2155,7 @@ private let omniAutomationScript = #"""
   }
 
   function findTaskById(doc, id) {
+    try { if (typeof Task !== 'undefined' && typeof Task.byIdentifier === 'function') { var t = Task.byIdentifier(id); if (t) { return t; } } } catch (e) {}
     var tasks = allTasks(doc);
     for (var i = 0; i < tasks.length; i++) {
       if (idValue(tasks[i]) === id) {
@@ -2174,6 +2201,7 @@ private let omniAutomationScript = #"""
       addTaskToResult(inbox[i], result, seen);
     }
     collectTasksFrom(doc, result, seen);
+    collectFromLibrary('Task', result, seen);
     return result;
   }
 
@@ -2558,7 +2586,7 @@ private let omniAutomationScript = #"""
 
   function makeProject(doc, params) {
     var project = null;
-    if (typeof Project === 'function') {
+    if (typeof Project !== 'undefined') {
       try {
         project = new Project(params.name);
       } catch (e) {
@@ -2600,7 +2628,7 @@ private let omniAutomationScript = #"""
 
   function makeTask(doc, params, project) {
     var task = null;
-    if (typeof Task === 'function') {
+    if (typeof Task !== 'undefined') {
       try {
         task = new Task(params.name, project || null);
       } catch (e) {
@@ -2868,9 +2896,9 @@ private let omniAutomationScript = #"""
     if (!task) {
       throw new Error('Task not found');
     }
-    if (!callIfFunction(task, 'delete') && !callIfFunction(task, 'remove')) {
-      throw new Error('Unable to delete task');
-    }
+    var deleted = callIfFunction(task, 'delete') || callIfFunction(task, 'remove');
+    if (!deleted) { try { deleteObject(task); deleted = true; } catch (e) {} }
+    if (!deleted) { throw new Error('Unable to delete task'); }
     return {id: params.id, deleted: true};
   }
 
@@ -2880,9 +2908,9 @@ private let omniAutomationScript = #"""
     if (!project) {
       throw new Error('Project not found');
     }
-    if (!callIfFunction(project, 'delete') && !callIfFunction(project, 'remove')) {
-      throw new Error('Unable to delete project');
-    }
+    var deleted = callIfFunction(project, 'delete') || callIfFunction(project, 'remove');
+    if (!deleted) { try { deleteObject(project); deleted = true; } catch (e) {} }
+    if (!deleted) { throw new Error('Unable to delete project'); }
     return {id: params.id, deleted: true};
   }
 
@@ -2892,9 +2920,9 @@ private let omniAutomationScript = #"""
     if (!tag) {
       throw new Error('Tag not found');
     }
-    if (!callIfFunction(tag, 'delete') && !callIfFunction(tag, 'remove')) {
-      throw new Error('Unable to delete tag');
-    }
+    var deleted = callIfFunction(tag, 'delete') || callIfFunction(tag, 'remove');
+    if (!deleted) { try { deleteObject(tag); deleted = true; } catch (e) {} }
+    if (!deleted) { throw new Error('Unable to delete tag'); }
     return {id: params.id, deleted: true};
   }
 
@@ -3104,7 +3132,7 @@ private let omniAutomationScript = #"""
     var parent = findTaskById(doc, params.parentId);
     if (!parent) { throw new Error('Parent task not found'); }
     var task = null;
-    if (typeof Task === 'function') {
+    if (typeof Task !== 'undefined') {
       try { task = new Task(params.name, parent); } catch (e) {}
     }
     if (!task && typeof parent.make === 'function') {
@@ -3158,9 +3186,9 @@ private let omniAutomationScript = #"""
     for (var j = 0; j < unique.length; j++) {
       try {
         var task = findTaskById(doc, unique[j]);
-        if (task && (callIfFunction(task, 'delete') || callIfFunction(task, 'remove'))) {
-          deleted.push(unique[j]);
-        }
+        var ok = callIfFunction(task, 'delete') || callIfFunction(task, 'remove');
+        if (!ok) { try { deleteObject(task); ok = true; } catch (e) {} }
+        if (task && ok) { deleted.push(unique[j]); }
       } catch (e) {}
     }
     return {deleted: deleted.length, ids: deleted};
