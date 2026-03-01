@@ -4127,8 +4127,16 @@ private final class MCPServer {
             }
             let arguments = params["arguments"] as? [String: Any] ?? [String: Any]()
             let resultValue = try callTool(named: toolName, arguments: arguments)
-            let jsonData = try JSONSerialization.data(withJSONObject: resultValue, options: [.sortedKeys])
-            let jsonText = String(data: jsonData, encoding: .utf8) ?? "{}"
+            let jsonText: String
+            if let str = resultValue as? String {
+                jsonText = str
+            } else if JSONSerialization.isValidJSONObject(resultValue),
+                      let jsonData = try? JSONSerialization.data(withJSONObject: resultValue, options: [.sortedKeys]),
+                      let encoded = String(data: jsonData, encoding: .utf8) {
+                jsonText = encoded
+            } else {
+                jsonText = "{}"
+            }
             let response: [String: Any] = [
                 "content": [["type": "text", "text": jsonText]]
             ]
@@ -4289,12 +4297,13 @@ private final class MCPServer {
         process.standardError = stderrPipe
 
         try process.run()
-        let timeoutItem = DispatchWorkItem { process.terminate() }
+        var timedOut = false
+        let timeoutItem = DispatchWorkItem { timedOut = true; process.terminate() }
         DispatchQueue.global().asyncAfter(deadline: .now() + 30, execute: timeoutItem)
         process.waitUntilExit()
         timeoutItem.cancel()
 
-        if process.terminationReason == .uncaughtSignal {
+        if timedOut {
             throw MCPError.scriptError("OmniFocus script timed out after 30 seconds")
         }
 
@@ -4362,12 +4371,13 @@ private final class MCPServer {
         process.standardError = stderrPipe
 
         try process.run()
-        let timeoutItem = DispatchWorkItem { process.terminate() }
+        var timedOut = false
+        let timeoutItem = DispatchWorkItem { timedOut = true; process.terminate() }
         DispatchQueue.global().asyncAfter(deadline: .now() + 30, execute: timeoutItem)
         process.waitUntilExit()
         timeoutItem.cancel()
 
-        if process.terminationReason == .uncaughtSignal {
+        if timedOut {
             throw MCPError.scriptError("OmniFocus script timed out after 30 seconds")
         }
 
