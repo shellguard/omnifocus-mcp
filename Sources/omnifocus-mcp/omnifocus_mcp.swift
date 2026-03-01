@@ -108,11 +108,11 @@ function normalizeStatus(value) {
   if (status.indexOf('done') !== -1 || status.indexOf('completed') !== -1) {
     return 'done';
   }
-  if (status.indexOf('dropped') !== -1 || status.indexOf('on hold') !== -1 || status.indexOf('hold') !== -1) {
+  if (status.indexOf('dropped') !== -1) {
     return 'dropped';
   }
-  if (status.indexOf('paused') !== -1) {
-    return 'paused';
+  if (status.indexOf('on hold') !== -1 || status.indexOf('hold') !== -1 || status.indexOf('paused') !== -1) {
+    return 'on_hold';
   }
   return String(value);
 }
@@ -1245,7 +1245,7 @@ function getProjectCounts(params) {
       if (!hasAvailable) { stalled++; }
     } else if (status === 'dropped') {
       dropped++;
-    } else if (status === 'paused') {
+    } else if (status === 'on_hold') {
       onHold++;
     }
   }
@@ -1711,11 +1711,11 @@ private let omniAutomationScript = #"""
     if (status.indexOf('done') !== -1 || status.indexOf('completed') !== -1) {
       return 'done';
     }
-    if (status.indexOf('dropped') !== -1 || status.indexOf('on hold') !== -1 || status.indexOf('hold') !== -1) {
+    if (status.indexOf('dropped') !== -1) {
       return 'dropped';
     }
-    if (status.indexOf('paused') !== -1) {
-      return 'paused';
+    if (status.indexOf('on hold') !== -1 || status.indexOf('hold') !== -1 || status.indexOf('paused') !== -1) {
+      return 'on_hold';
     }
     return String(value);
   }
@@ -3067,7 +3067,7 @@ private let omniAutomationScript = #"""
         if (!hasAvailable) { stalled++; }
       } else if (status === 'dropped') {
         dropped++;
-      } else if (status === 'paused') {
+      } else if (status === 'on_hold') {
         onHold++;
       }
     }
@@ -3621,7 +3621,7 @@ private final class MCPServer {
         ),
         ToolDefinition(
             name: "omnifocus_eval_automation",
-            description: "Evaluate Omni Automation JavaScript inside OmniFocus.",
+            description: "Evaluate Omni Automation JavaScript inside OmniFocus. WARNING: executes arbitrary code with full access to all OmniFocus data. Use only for operations not covered by other tools.",
             inputSchema: [
                 "type": "object",
                 "properties": [
@@ -3886,7 +3886,7 @@ private final class MCPServer {
         ),
         ToolDefinition(
             name: "omnifocus_delete_folder",
-            description: "Delete a folder by id.",
+            description: "Delete a folder by id. WARNING: irreversibly deletes the folder and ALL contained projects and their tasks.",
             inputSchema: [
                 "type": "object",
                 "properties": ["id": ["type": "string"]],
@@ -4108,7 +4108,7 @@ private final class MCPServer {
             let result: [String: Any] = [
                 "protocolVersion": "2024-11-05",
                 "capabilities": ["tools": [String: Any]()],
-                "serverInfo": ["name": "omnifocus-mcp", "version": "0.1.0"]
+                "serverInfo": ["name": "omnifocus-mcp", "version": "0.2.0"]
             ]
             sendResult(id: id, result: result)
         case "tools/list":
@@ -4127,8 +4127,10 @@ private final class MCPServer {
             }
             let arguments = params["arguments"] as? [String: Any] ?? [String: Any]()
             let resultValue = try callTool(named: toolName, arguments: arguments)
+            let jsonData = try JSONSerialization.data(withJSONObject: resultValue, options: [.sortedKeys])
+            let jsonText = String(data: jsonData, encoding: .utf8) ?? "{}"
             let response: [String: Any] = [
-                "content": [["type": "json", "json": resultValue]]
+                "content": [["type": "text", "text": jsonText]]
             ]
             sendResult(id: id, result: response)
         case "initialized", "shutdown", "exit":
@@ -4287,7 +4289,14 @@ private final class MCPServer {
         process.standardError = stderrPipe
 
         try process.run()
+        let timeoutItem = DispatchWorkItem { process.terminate() }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 30, execute: timeoutItem)
         process.waitUntilExit()
+        timeoutItem.cancel()
+
+        if process.terminationReason == .uncaughtSignal {
+            throw MCPError.scriptError("OmniFocus script timed out after 30 seconds")
+        }
 
         let outputData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
         let errorData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
@@ -4316,7 +4325,13 @@ private final class MCPServer {
     }
 
     private func runOmniAutomationScript(_ script: String, parseJson: Bool) throws -> Any {
-        let appPath = ProcessInfo.processInfo.environment["OF_APP_PATH"] ?? "/Applications/OmniFocus.app"
+        let rawAppPath = ProcessInfo.processInfo.environment["OF_APP_PATH"] ?? "/Applications/OmniFocus.app"
+        // Validate path: only allow characters safe for embedding in AppleScript string literals
+        let allowedCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "/._- "))
+        guard rawAppPath.unicodeScalars.allSatisfy({ allowedCharacters.contains($0) }) else {
+            throw MCPError.scriptError("OF_APP_PATH contains unsafe characters: \(rawAppPath)")
+        }
+        let appPath = rawAppPath
         let termsPath = appPath.replacingOccurrences(of: "\"", with: "\\\"")
         let appleScriptLines = [
             "using terms from application \"\(termsPath)\"",
@@ -4347,7 +4362,14 @@ private final class MCPServer {
         process.standardError = stderrPipe
 
         try process.run()
+        let timeoutItem = DispatchWorkItem { process.terminate() }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 30, execute: timeoutItem)
         process.waitUntilExit()
+        timeoutItem.cancel()
+
+        if process.terminationReason == .uncaughtSignal {
+            throw MCPError.scriptError("OmniFocus script timed out after 30 seconds")
+        }
 
         let outputData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
         let errorData = stderrPipe.fileHandleForReading.readDataToEndOfFile()

@@ -57,7 +57,7 @@ Example (generic MCP config):
 
 ```json
 {
-  "command": "/Users/ap/omnifocus-mcp/.build/release/omnifocus-mcp",
+  "command": "/usr/local/bin/omnifocus-mcp",
   "args": [],
   "env": {
     "OF_APP_PATH": "/Applications/OmniFocus.app",
