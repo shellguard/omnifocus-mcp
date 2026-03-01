@@ -1087,6 +1087,364 @@ function deleteTag(params) {
   return {id: params.id, deleted: true};
 }
 
+function uncompleteTask(params) {
+  var doc = getDocument();
+  var task = findTaskById(doc, params.id);
+  if (!task) {
+    throw new Error('Task not found');
+  }
+  var marked = false;
+  try {
+    if (typeof task.markIncomplete === 'function') {
+      task.markIncomplete();
+      marked = true;
+    }
+  } catch (e) {}
+  if (!marked) {
+    try {
+      task.completed = false;
+    } catch (e) {}
+  }
+  return taskToJSON(task);
+}
+
+function uncompleteProject(params) {
+  var doc = getDocument();
+  var project = findProjectById(doc, params.id);
+  if (!project) {
+    throw new Error('Project not found');
+  }
+  try {
+    project.status = 'active project';
+  } catch (e) {
+    try {
+      project.completed = false;
+    } catch (e2) {}
+  }
+  return projectToJSON(project);
+}
+
+function appendToNote(params) {
+  var doc = getDocument();
+  var obj = null;
+  if (params.type === 'project') {
+    obj = findProjectById(doc, params.id);
+    if (!obj) { throw new Error('Project not found'); }
+    appendNote(obj, params.text);
+    return projectToJSON(obj);
+  } else {
+    obj = findTaskById(doc, params.id);
+    if (!obj) { throw new Error('Task not found'); }
+    appendNote(obj, params.text);
+    return taskToJSON(obj);
+  }
+}
+
+function searchTags(params) {
+  var doc = getDocument();
+  var query = (params.query || '').toLowerCase();
+  var tags = arrayify(firstValue(doc, ['flattenedTags', 'tags', 'contexts']));
+  var result = [];
+  for (var i = 0; i < tags.length; i++) {
+    var name = (safeCall(tags[i], 'name') || '').toLowerCase();
+    if (!query || name.indexOf(query) !== -1) {
+      result.push(tagToJSON(tags[i]));
+    }
+  }
+  return result;
+}
+
+function setProjectStatus(params) {
+  var doc = getDocument();
+  var project = findProjectById(doc, params.id);
+  if (!project) { throw new Error('Project not found'); }
+  var statusMap = {'active': 'active project', 'on_hold': 'on hold', 'dropped': 'dropped'};
+  var jxaStatus = statusMap[params.status];
+  if (!jxaStatus) { throw new Error('Invalid status: ' + params.status); }
+  try {
+    project.status = jxaStatus;
+  } catch (e) {
+    throw new Error('Unable to set project status');
+  }
+  return projectToJSON(project);
+}
+
+function getFolder(params) {
+  var doc = getDocument();
+  var folder = null;
+  if (params.id) {
+    folder = findFolderById(doc, params.id);
+  } else if (params.name) {
+    folder = findFolderByName(doc, params.name);
+  }
+  if (!folder) { throw new Error('Folder not found'); }
+  var result = folderToJSON(folder);
+  result.projects = arrayify(firstValue(folder, ['projects', 'flattenedProjects'])).map(function(p) {
+    return safeCall(p, 'name');
+  }).filter(function(n) { return n; });
+  result.subfolders = arrayify(firstValue(folder, ['folders'])).map(function(f) {
+    return safeCall(f, 'name');
+  }).filter(function(n) { return n; });
+  return result;
+}
+
+function updateFolder(params) {
+  var doc = getDocument();
+  var folder = findFolderById(doc, params.id);
+  if (!folder) { throw new Error('Folder not found'); }
+  if (params.name !== undefined) {
+    folder.name = params.name;
+  }
+  return folderToJSON(folder);
+}
+
+function deleteFolder(params) {
+  var doc = getDocument();
+  var folder = findFolderById(doc, params.id);
+  if (!folder) { throw new Error('Folder not found'); }
+  var name = safeCall(folder, 'name');
+  folder.delete();
+  return {id: params.id, deleted: true, name: name};
+}
+
+function getTaskCounts(params) {
+  var doc = getDocument();
+  var tasks = arrayify(firstValue(doc, ['flattenedTasks', 'tasks']));
+  var inbox = arrayify(firstValue(doc, ['inboxTasks', 'inbox']));
+  var total = 0, available = 0, completed = 0, overdue = 0, flagged = 0;
+  for (var i = 0; i < tasks.length; i++) {
+    var task = tasks[i];
+    total++;
+    if (!!safeCall(task, 'completed')) { completed++; continue; }
+    if (isTaskAvailable(task)) { available++; }
+    if (isTaskOverdue(task)) { overdue++; }
+    if (!!safeCall(task, 'flagged')) { flagged++; }
+  }
+  return {total: total, available: available, completed: completed, overdue: overdue, flagged: flagged, inbox: inbox.length};
+}
+
+function getProjectCounts(params) {
+  var doc = getDocument();
+  var projects = arrayify(firstValue(doc, ['flattenedProjects', 'projects']));
+  var total = 0, active = 0, onHold = 0, dropped = 0, stalled = 0;
+  for (var i = 0; i < projects.length; i++) {
+    var project = projects[i];
+    total++;
+    var rawStatus = String(firstValue(project, ['status', 'projectStatus']) || '');
+    var status = normalizeStatus(rawStatus);
+    if (status === 'active') {
+      active++;
+      var ptasks = arrayify(firstValue(project, ['tasks', 'flattenedTasks']));
+      var hasAvailable = false;
+      for (var j = 0; j < ptasks.length; j++) {
+        if (!safeCall(ptasks[j], 'completed') && isTaskAvailable(ptasks[j])) {
+          hasAvailable = true;
+          break;
+        }
+      }
+      if (!hasAvailable) { stalled++; }
+    } else if (status === 'dropped') {
+      dropped++;
+    } else if (status === 'paused') {
+      onHold++;
+    }
+  }
+  return {total: total, active: active, on_hold: onHold, dropped: dropped, stalled: stalled};
+}
+
+function getForecast(params) {
+  var doc = getDocument();
+  var tasks = arrayify(firstValue(doc, ['flattenedTasks', 'tasks']));
+  var now = new Date();
+  var todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+  var weekEnd = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+  var overdue = [], today = [], flagged = [], dueThisWeek = [];
+  for (var i = 0; i < tasks.length; i++) {
+    var task = tasks[i];
+    if (!!safeCall(task, 'completed')) { continue; }
+    var dueDate = dateValue(firstValue(task, ['dueDate']));
+    if (dueDate) {
+      if (dueDate.getTime() < now.getTime()) {
+        overdue.push(taskToJSON(task));
+      } else if (dueDate.getTime() <= todayEnd.getTime()) {
+        today.push(taskToJSON(task));
+      } else if (dueDate.getTime() <= weekEnd.getTime()) {
+        dueThisWeek.push(taskToJSON(task));
+      }
+    }
+    if (!!safeCall(task, 'flagged')) { flagged.push(taskToJSON(task)); }
+  }
+  return {overdue: overdue, today: today, flagged: flagged, dueThisWeek: dueThisWeek};
+}
+
+function createSubtask(params) {
+  var doc = getDocument();
+  var parent = findTaskById(doc, params.parentId);
+  if (!parent) { throw new Error('Parent task not found'); }
+  var properties = {name: params.name};
+  if (params.note !== undefined) { properties.note = params.note; }
+  if (params.flagged !== undefined) { properties.flagged = params.flagged; }
+  if (params.estimatedMinutes !== undefined) { properties.estimatedMinutes = params.estimatedMinutes; }
+  var due = parseDate(params.due);
+  if (due) { properties.dueDate = due; }
+  var deferDate = parseDate(params.defer);
+  if (deferDate) { properties.deferDate = deferDate; }
+  var task = parent.make({new: 'task', withProperties: properties});
+  if (params.tags !== undefined) {
+    var tagObjects = resolveTags(doc, params.tags, params.createMissingTags === true);
+    task.tags = tagObjects;
+  }
+  return taskToJSON(task);
+}
+
+function duplicateTask(params) {
+  var doc = getDocument();
+  var task = findTaskById(doc, params.id);
+  if (!task) { throw new Error('Task not found'); }
+  var project = firstValue(task, ['containingProject', 'project']);
+  var newParams = {
+    name: params.name || safeCall(task, 'name'),
+    note: safeCall(task, 'note'),
+    flagged: safeCall(task, 'flagged'),
+    due: toISO(firstValue(task, ['dueDate'])),
+    defer: toISO(firstValue(task, ['deferDate'])),
+    estimatedMinutes: safeCall(task, 'estimatedMinutes'),
+    tags: tagNames(task),
+    createMissingTags: false
+  };
+  if (project) {
+    newParams.project = safeCall(project, 'name');
+    newParams.createMissingProject = false;
+  } else {
+    newParams.inbox = true;
+  }
+  return createTask(newParams);
+}
+
+function createTasksBatch(params) {
+  var tasks = params.tasks || [];
+  var result = [];
+  for (var i = 0; i < tasks.length; i++) {
+    result.push(createTask(tasks[i]));
+  }
+  return result;
+}
+
+function deleteTasksBatch(params) {
+  var ids = params.ids || [];
+  var seen = {};
+  var unique = [];
+  for (var i = 0; i < ids.length; i++) {
+    if (!seen[ids[i]]) { seen[ids[i]] = true; unique.push(ids[i]); }
+  }
+  var deleted = [];
+  for (var j = 0; j < unique.length; j++) {
+    try {
+      deleteTask({id: unique[j]});
+      deleted.push(unique[j]);
+    } catch (e) {}
+  }
+  return {deleted: deleted.length, ids: deleted};
+}
+
+function moveTasksBatch(params) {
+  var doc = getDocument();
+  var project = findProjectByName(doc, params.project);
+  if (!project) { throw new Error('Project not found'); }
+  var result = [];
+  for (var i = 0; i < (params.ids || []).length; i++) {
+    var task = findTaskById(doc, params.ids[i]);
+    if (!task) { continue; }
+    try {
+      project.tasks.push(task);
+    } catch (e) {
+      try { task.project = project; } catch (e2) {}
+    }
+    result.push(taskToJSON(task));
+  }
+  return result;
+}
+
+function listNotifications(params) {
+  var doc = getDocument();
+  var task = findTaskById(doc, params.id);
+  if (!task) { throw new Error('Task not found'); }
+  var alarms = arrayify(firstValue(task, ['alarms', 'alerts', 'notifications']));
+  return alarms.map(function(alarm) {
+    return {
+      id: normalizeId(safeCall(alarm, 'id')),
+      kind: safeCall(alarm, 'kind') || safeCall(alarm, 'type'),
+      fireDate: toISO(firstValue(alarm, ['absoluteFireDate', 'fireDate', 'date']))
+    };
+  });
+}
+
+function addNotification(params) {
+  var doc = getDocument();
+  var task = findTaskById(doc, params.id);
+  if (!task) { throw new Error('Task not found'); }
+  var fireDate = parseDate(params.date);
+  if (!fireDate) { throw new Error('Invalid date'); }
+  var alarm = null;
+  try {
+    alarm = task.make({new: 'alarm', withProperties: {kind: 'absolute', absoluteFireDate: fireDate}});
+  } catch (e) {
+    try {
+      alarm = task.make({new: 'alarm', withProperties: {absoluteFireDate: fireDate}});
+    } catch (e2) {
+      throw new Error('Unable to create notification: ' + e2.message);
+    }
+  }
+  return {
+    id: normalizeId(safeCall(alarm, 'id')),
+    kind: safeCall(alarm, 'kind'),
+    fireDate: toISO(firstValue(alarm, ['absoluteFireDate', 'fireDate']))
+  };
+}
+
+function removeNotification(params) {
+  var doc = getDocument();
+  var task = findTaskById(doc, params.id);
+  if (!task) { throw new Error('Task not found'); }
+  var alarms = arrayify(firstValue(task, ['alarms', 'alerts', 'notifications']));
+  var targetId = normalizeId(params.notificationId);
+  for (var i = 0; i < alarms.length; i++) {
+    if (normalizeId(safeCall(alarms[i], 'id')) === targetId) {
+      alarms[i].delete();
+      return {deleted: true, notificationId: params.notificationId};
+    }
+  }
+  throw new Error('Notification not found');
+}
+
+function setTaskRepetition(params) {
+  var doc = getDocument();
+  var task = findTaskById(doc, params.id);
+  if (!task) { throw new Error('Task not found'); }
+  if (params.rule === null || params.rule === undefined || params.rule === '') {
+    try { task.repetitionRule = null; } catch (e) {}
+    try { task.recurrenceRule = null; } catch (e) {}
+    return taskToJSON(task);
+  }
+  var applied = false;
+  try {
+    task.repetitionRule = params.rule;
+    applied = true;
+  } catch (e) {
+    try {
+      task.recurrenceRule = params.rule;
+      applied = true;
+    } catch (e2) {
+      throw new Error('Unable to set repetition rule: ' + e2.message);
+    }
+  }
+  if (params.scheduleType) {
+    var methodMap = {'fixed': 'fixed', 'due': 'due date', 'defer': 'defer date'};
+    try { task.repetitionMethod = methodMap[params.scheduleType] || params.scheduleType; } catch (e) {}
+  }
+  return taskToJSON(task);
+}
+
 var input = readInput();
 var action = input.action;
 var params = input.params || {};
@@ -1182,6 +1540,66 @@ switch (action) {
     break;
   case 'delete_tag':
     result = deleteTag(params);
+    break;
+  case 'uncomplete_task':
+    result = uncompleteTask(params);
+    break;
+  case 'uncomplete_project':
+    result = uncompleteProject(params);
+    break;
+  case 'append_to_note':
+    result = appendToNote(params);
+    break;
+  case 'search_tags':
+    result = searchTags(params);
+    break;
+  case 'set_project_status':
+    result = setProjectStatus(params);
+    break;
+  case 'get_folder':
+    result = getFolder(params);
+    break;
+  case 'update_folder':
+    result = updateFolder(params);
+    break;
+  case 'delete_folder':
+    result = deleteFolder(params);
+    break;
+  case 'get_task_counts':
+    result = getTaskCounts(params);
+    break;
+  case 'get_project_counts':
+    result = getProjectCounts(params);
+    break;
+  case 'get_forecast':
+    result = getForecast(params);
+    break;
+  case 'create_subtask':
+    result = createSubtask(params);
+    break;
+  case 'duplicate_task':
+    result = duplicateTask(params);
+    break;
+  case 'create_tasks_batch':
+    result = createTasksBatch(params);
+    break;
+  case 'delete_tasks_batch':
+    result = deleteTasksBatch(params);
+    break;
+  case 'move_tasks_batch':
+    result = moveTasksBatch(params);
+    break;
+  case 'list_notifications':
+    result = listNotifications(params);
+    break;
+  case 'add_notification':
+    result = addNotification(params);
+    break;
+  case 'remove_notification':
+    result = removeNotification(params);
+    break;
+  case 'set_task_repetition':
+    result = setTaskRepetition(params);
     break;
   default:
     throw new Error('Unknown action: ' + action);
@@ -2480,6 +2898,376 @@ private let omniAutomationScript = #"""
     return {id: params.id, deleted: true};
   }
 
+  function appendNote(obj, text) {
+    if (!text) { return; }
+    var existing = safeCall(obj, 'note') || '';
+    var separator = existing ? '\n' : '';
+    safeSet(obj, 'note', existing + separator + text);
+  }
+
+  function uncompleteTask(params) {
+    var doc = getDatabase();
+    var task = findTaskById(doc, params.id);
+    if (!task) { throw new Error('Task not found'); }
+    var marked = false;
+    if (callIfFunction(task, 'markIncomplete')) {
+      marked = true;
+    }
+    if (!marked) {
+      safeSet(task, 'completed', false);
+    }
+    return taskToJSON(task);
+  }
+
+  function uncompleteProject(params) {
+    var doc = getDatabase();
+    var project = findProjectById(doc, params.id);
+    if (!project) { throw new Error('Project not found'); }
+    if (typeof Project !== 'undefined' && Project.Status && Project.Status.Active) {
+      if (!safeSet(project, 'status', Project.Status.Active)) {
+        safeSet(project, 'completed', false);
+      }
+    } else {
+      if (!safeSet(project, 'status', 'active')) {
+        safeSet(project, 'completed', false);
+      }
+    }
+    return projectToJSON(project);
+  }
+
+  function appendToNote(params) {
+    var doc = getDatabase();
+    if (params.type === 'project') {
+      var project = findProjectById(doc, params.id);
+      if (!project) { throw new Error('Project not found'); }
+      appendNote(project, params.text);
+      return projectToJSON(project);
+    } else {
+      var task = findTaskById(doc, params.id);
+      if (!task) { throw new Error('Task not found'); }
+      appendNote(task, params.text);
+      return taskToJSON(task);
+    }
+  }
+
+  function searchTags(params) {
+    var doc = getDatabase();
+    var query = (params.query || '').toLowerCase();
+    var tags = arrayify(firstValue(doc, ['flattenedTags', 'tags', 'contexts']));
+    var result = [];
+    for (var i = 0; i < tags.length; i++) {
+      var name = (safeCall(tags[i], 'name') || '').toLowerCase();
+      if (!query || name.indexOf(query) !== -1) {
+        result.push(tagToJSON(tags[i]));
+      }
+    }
+    return result;
+  }
+
+  function setProjectStatus(params) {
+    var doc = getDatabase();
+    var project = findProjectById(doc, params.id);
+    if (!project) { throw new Error('Project not found'); }
+    var applied = false;
+    if (typeof Project !== 'undefined' && Project.Status) {
+      var enumMap = {
+        'active': Project.Status.Active,
+        'on_hold': Project.Status.OnHold,
+        'dropped': Project.Status.Dropped
+      };
+      var enumVal = enumMap[params.status];
+      if (enumVal !== undefined) {
+        applied = safeSet(project, 'status', enumVal);
+      }
+    }
+    if (!applied) {
+      var strMap = {'active': 'active', 'on_hold': 'on hold', 'dropped': 'dropped'};
+      var strVal = strMap[params.status];
+      if (!strVal) { throw new Error('Invalid status: ' + params.status); }
+      applied = safeSet(project, 'status', strVal);
+    }
+    if (!applied) { throw new Error('Unable to set project status'); }
+    return projectToJSON(project);
+  }
+
+  function getFolder(params) {
+    var doc = getDatabase();
+    var folder = null;
+    if (params.id) {
+      folder = findFolderById(doc, params.id);
+    } else if (params.name) {
+      folder = findFolderByName(doc, params.name);
+    }
+    if (!folder) { throw new Error('Folder not found'); }
+    var result = folderToJSON(folder);
+    result.projects = arrayify(firstValue(folder, ['projects', 'flattenedProjects'])).map(function(p) {
+      return safeCall(p, 'name');
+    }).filter(function(n) { return n; });
+    result.subfolders = arrayify(firstValue(folder, ['folders', 'childFolders'])).map(function(f) {
+      return safeCall(f, 'name');
+    }).filter(function(n) { return n; });
+    return result;
+  }
+
+  function updateFolder(params) {
+    var doc = getDatabase();
+    var folder = findFolderById(doc, params.id);
+    if (!folder) { throw new Error('Folder not found'); }
+    if (params.name !== undefined) {
+      safeSet(folder, 'name', params.name);
+    }
+    return folderToJSON(folder);
+  }
+
+  function deleteFolder(params) {
+    var doc = getDatabase();
+    var folder = findFolderById(doc, params.id);
+    if (!folder) { throw new Error('Folder not found'); }
+    var name = safeCall(folder, 'name');
+    if (!callIfFunction(folder, 'delete') && !callIfFunction(folder, 'remove')) {
+      throw new Error('Unable to delete folder');
+    }
+    return {id: params.id, deleted: true, name: name};
+  }
+
+  function getTaskCounts(params) {
+    var doc = getDatabase();
+    var tasks = allTasks(doc);
+    var inboxItems = arrayify(firstValue(doc, ['inboxTasks', 'inbox', 'inboxItems']));
+    var total = 0, available = 0, completed = 0, overdue = 0, flagged = 0;
+    for (var i = 0; i < tasks.length; i++) {
+      var task = tasks[i];
+      total++;
+      if (!!safeCall(task, 'completed')) { completed++; continue; }
+      if (isTaskAvailable(task)) { available++; }
+      if (isTaskOverdue(task)) { overdue++; }
+      if (!!safeCall(task, 'flagged')) { flagged++; }
+    }
+    return {total: total, available: available, completed: completed, overdue: overdue, flagged: flagged, inbox: inboxItems.length};
+  }
+
+  function getProjectCounts(params) {
+    var doc = getDatabase();
+    var projects = allProjects(doc);
+    var total = 0, active = 0, onHold = 0, dropped = 0, stalled = 0;
+    for (var i = 0; i < projects.length; i++) {
+      var project = projects[i];
+      total++;
+      var status = normalizeStatus(String(firstValue(project, ['status', 'projectStatus']) || ''));
+      if (status === 'active') {
+        active++;
+        var ptasks = arrayify(firstValue(project, ['tasks', 'flattenedTasks']));
+        var hasAvailable = false;
+        for (var j = 0; j < ptasks.length; j++) {
+          if (!safeCall(ptasks[j], 'completed') && isTaskAvailable(ptasks[j])) {
+            hasAvailable = true;
+            break;
+          }
+        }
+        if (!hasAvailable) { stalled++; }
+      } else if (status === 'dropped') {
+        dropped++;
+      } else if (status === 'paused') {
+        onHold++;
+      }
+    }
+    return {total: total, active: active, on_hold: onHold, dropped: dropped, stalled: stalled};
+  }
+
+  function getForecast(params) {
+    var doc = getDatabase();
+    var tasks = allTasks(doc);
+    var now = new Date();
+    var todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+    var weekEnd = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    var overdue = [], today = [], flagged = [], dueThisWeek = [];
+    for (var i = 0; i < tasks.length; i++) {
+      var task = tasks[i];
+      if (!!safeCall(task, 'completed')) { continue; }
+      var dueDate = dateValue(firstValue(task, ['dueDate']));
+      if (dueDate) {
+        if (dueDate.getTime() < now.getTime()) {
+          overdue.push(taskToJSON(task));
+        } else if (dueDate.getTime() <= todayEnd.getTime()) {
+          today.push(taskToJSON(task));
+        } else if (dueDate.getTime() <= weekEnd.getTime()) {
+          dueThisWeek.push(taskToJSON(task));
+        }
+      }
+      if (!!safeCall(task, 'flagged')) { flagged.push(taskToJSON(task)); }
+    }
+    return {overdue: overdue, today: today, flagged: flagged, dueThisWeek: dueThisWeek};
+  }
+
+  function createSubtask(params) {
+    var doc = getDatabase();
+    var parent = findTaskById(doc, params.parentId);
+    if (!parent) { throw new Error('Parent task not found'); }
+    var task = null;
+    if (typeof Task === 'function') {
+      try { task = new Task(params.name, parent); } catch (e) {}
+    }
+    if (!task && typeof parent.make === 'function') {
+      try { task = parent.make({new: 'task', withProperties: {name: params.name}}); } catch (e) {}
+    }
+    if (!task) { throw new Error('Unable to create subtask'); }
+    applyCommonTaskFields(task, params, doc);
+    return taskToJSON(task);
+  }
+
+  function duplicateTask(params) {
+    var doc = getDatabase();
+    var task = findTaskById(doc, params.id);
+    if (!task) { throw new Error('Task not found'); }
+    var project = firstValue(task, ['containingProject', 'project']);
+    var newParams = {
+      name: params.name || safeCall(task, 'name'),
+      note: safeCall(task, 'note'),
+      flagged: safeCall(task, 'flagged'),
+      due: toISO(firstValue(task, ['dueDate'])),
+      defer: toISO(firstValue(task, ['deferDate'])),
+      estimatedMinutes: safeCall(task, 'estimatedMinutes'),
+      tags: tagNames(task),
+      createMissingTags: false
+    };
+    if (project) {
+      newParams.project = safeCall(project, 'name');
+      newParams.createMissingProject = false;
+    }
+    return createTask(newParams);
+  }
+
+  function createTasksBatch(params) {
+    var tasks = params.tasks || [];
+    var result = [];
+    for (var i = 0; i < tasks.length; i++) {
+      result.push(createTask(tasks[i]));
+    }
+    return result;
+  }
+
+  function deleteTasksBatch(params) {
+    var doc = getDatabase();
+    var ids = params.ids || [];
+    var seen = {};
+    var unique = [];
+    for (var i = 0; i < ids.length; i++) {
+      if (!seen[ids[i]]) { seen[ids[i]] = true; unique.push(ids[i]); }
+    }
+    var deleted = [];
+    for (var j = 0; j < unique.length; j++) {
+      try {
+        var task = findTaskById(doc, unique[j]);
+        if (task && (callIfFunction(task, 'delete') || callIfFunction(task, 'remove'))) {
+          deleted.push(unique[j]);
+        }
+      } catch (e) {}
+    }
+    return {deleted: deleted.length, ids: deleted};
+  }
+
+  function moveTasksBatch(params) {
+    var doc = getDatabase();
+    var project = findProjectByName(doc, params.project);
+    if (!project) { throw new Error('Project not found'); }
+    var result = [];
+    var ids = params.ids || [];
+    for (var i = 0; i < ids.length; i++) {
+      var task = findTaskById(doc, ids[i]);
+      if (!task) { continue; }
+      assignTaskToProject(task, project);
+      result.push(taskToJSON(task));
+    }
+    return result;
+  }
+
+  function listNotifications(params) {
+    var doc = getDatabase();
+    var task = findTaskById(doc, params.id);
+    if (!task) { throw new Error('Task not found'); }
+    var alarms = arrayify(firstValue(task, ['alarms', 'alerts', 'notifications']));
+    return alarms.map(function(alarm) {
+      return {
+        id: idValue(alarm),
+        kind: safeCall(alarm, 'kind') || safeCall(alarm, 'type'),
+        fireDate: toISO(firstValue(alarm, ['absoluteFireDate', 'fireDate', 'date']))
+      };
+    });
+  }
+
+  function addNotification(params) {
+    var doc = getDatabase();
+    var task = findTaskById(doc, params.id);
+    if (!task) { throw new Error('Task not found'); }
+    var fireDate = parseDate(params.date);
+    if (!fireDate) { throw new Error('Invalid date'); }
+    var alarm = null;
+    if (typeof Alarm !== 'undefined' && typeof Alarm.byAbsoluteDateWithTask === 'function') {
+      try { alarm = Alarm.byAbsoluteDateWithTask(fireDate, task); } catch (e) {}
+    }
+    if (!alarm && task && typeof task.make === 'function') {
+      try { alarm = task.make({new: 'alarm', withProperties: {absoluteFireDate: fireDate}}); } catch (e) {}
+    }
+    if (!alarm) { throw new Error('Unable to create notification'); }
+    return {
+      id: idValue(alarm),
+      kind: safeCall(alarm, 'kind'),
+      fireDate: toISO(firstValue(alarm, ['absoluteFireDate', 'fireDate']))
+    };
+  }
+
+  function removeNotification(params) {
+    var doc = getDatabase();
+    var task = findTaskById(doc, params.id);
+    if (!task) { throw new Error('Task not found'); }
+    var alarms = arrayify(firstValue(task, ['alarms', 'alerts', 'notifications']));
+    var targetId = normalizeId(params.notificationId);
+    for (var i = 0; i < alarms.length; i++) {
+      if (idValue(alarms[i]) === targetId) {
+        if (!callIfFunction(alarms[i], 'delete') && !callIfFunction(alarms[i], 'remove')) {
+          throw new Error('Unable to remove notification');
+        }
+        return {deleted: true, notificationId: params.notificationId};
+      }
+    }
+    throw new Error('Notification not found');
+  }
+
+  function setTaskRepetition(params) {
+    var doc = getDatabase();
+    var task = findTaskById(doc, params.id);
+    if (!task) { throw new Error('Task not found'); }
+    if (params.rule === null || params.rule === undefined || params.rule === '') {
+      safeSet(task, 'repetitionRule', null);
+      safeSet(task, 'recurrenceRule', null);
+      return taskToJSON(task);
+    }
+    var applied = false;
+    if (typeof Task !== 'undefined' && Task.RepetitionRule && Task.RepetitionMethod) {
+      try {
+        var methodMap = {
+          'fixed': Task.RepetitionMethod.Fixed,
+          'due': Task.RepetitionMethod.DueDate,
+          'defer': Task.RepetitionMethod.DeferDate
+        };
+        var method = methodMap[params.scheduleType || 'due'] || Task.RepetitionMethod.DueDate;
+        var rule = new Task.RepetitionRule(params.rule, method);
+        applied = safeSet(task, 'repetitionRule', rule);
+      } catch (e) {}
+    }
+    if (!applied) {
+      if (!safeSet(task, 'repetitionRule', params.rule)) {
+        safeSet(task, 'recurrenceRule', params.rule);
+      }
+      applied = true;
+    }
+    if (params.scheduleType) {
+      var strMap = {'fixed': 'fixed', 'due': 'due date', 'defer': 'defer date'};
+      safeSet(task, 'repetitionMethod', strMap[params.scheduleType] || params.scheduleType);
+    }
+    return taskToJSON(task);
+  }
+
   function encodeResult(value) {
     if (value === undefined) {
       return 'null';
@@ -2586,6 +3374,66 @@ private let omniAutomationScript = #"""
       break;
     case 'delete_tag':
       result = deleteTag(params);
+      break;
+    case 'uncomplete_task':
+      result = uncompleteTask(params);
+      break;
+    case 'uncomplete_project':
+      result = uncompleteProject(params);
+      break;
+    case 'append_to_note':
+      result = appendToNote(params);
+      break;
+    case 'search_tags':
+      result = searchTags(params);
+      break;
+    case 'set_project_status':
+      result = setProjectStatus(params);
+      break;
+    case 'get_folder':
+      result = getFolder(params);
+      break;
+    case 'update_folder':
+      result = updateFolder(params);
+      break;
+    case 'delete_folder':
+      result = deleteFolder(params);
+      break;
+    case 'get_task_counts':
+      result = getTaskCounts(params);
+      break;
+    case 'get_project_counts':
+      result = getProjectCounts(params);
+      break;
+    case 'get_forecast':
+      result = getForecast(params);
+      break;
+    case 'create_subtask':
+      result = createSubtask(params);
+      break;
+    case 'duplicate_task':
+      result = duplicateTask(params);
+      break;
+    case 'create_tasks_batch':
+      result = createTasksBatch(params);
+      break;
+    case 'delete_tasks_batch':
+      result = deleteTasksBatch(params);
+      break;
+    case 'move_tasks_batch':
+      result = moveTasksBatch(params);
+      break;
+    case 'list_notifications':
+      result = listNotifications(params);
+      break;
+    case 'add_notification':
+      result = addNotification(params);
+      break;
+    case 'remove_notification':
+      result = removeNotification(params);
+      break;
+    case 'set_task_repetition':
+      result = setTaskRepetition(params);
       break;
     default:
       throw new Error('Unknown action: ' + action);
@@ -2958,6 +3806,234 @@ private final class MCPServer {
                 "properties": ["id": ["type": "string"]],
                 "required": ["id"]
             ]
+        ),
+        ToolDefinition(
+            name: "omnifocus_uncomplete_task",
+            description: "Mark a task incomplete (undo completion) by id.",
+            inputSchema: [
+                "type": "object",
+                "properties": ["id": ["type": "string"]],
+                "required": ["id"]
+            ]
+        ),
+        ToolDefinition(
+            name: "omnifocus_uncomplete_project",
+            description: "Mark a project active again (undo completion) by id.",
+            inputSchema: [
+                "type": "object",
+                "properties": ["id": ["type": "string"]],
+                "required": ["id"]
+            ]
+        ),
+        ToolDefinition(
+            name: "omnifocus_append_to_note",
+            description: "Append text to the note of a task or project.",
+            inputSchema: [
+                "type": "object",
+                "properties": [
+                    "id": ["type": "string"],
+                    "type": ["type": "string", "enum": ["task", "project"]],
+                    "text": ["type": "string"]
+                ],
+                "required": ["id", "text"]
+            ]
+        ),
+        ToolDefinition(
+            name: "omnifocus_search_tags",
+            description: "Search tags by name (case-insensitive substring).",
+            inputSchema: [
+                "type": "object",
+                "properties": [
+                    "query": ["type": "string", "description": "Substring to match against tag names"]
+                ],
+                "required": ["query"]
+            ]
+        ),
+        ToolDefinition(
+            name: "omnifocus_set_project_status",
+            description: "Set a project's status to active, on_hold, or dropped.",
+            inputSchema: [
+                "type": "object",
+                "properties": [
+                    "id": ["type": "string"],
+                    "status": ["type": "string", "enum": ["active", "on_hold", "dropped"]]
+                ],
+                "required": ["id", "status"]
+            ]
+        ),
+        ToolDefinition(
+            name: "omnifocus_get_folder",
+            description: "Get a folder by id or name, including its projects and subfolders.",
+            inputSchema: [
+                "type": "object",
+                "properties": [
+                    "id": ["type": "string"],
+                    "name": ["type": "string"]
+                ]
+            ]
+        ),
+        ToolDefinition(
+            name: "omnifocus_update_folder",
+            description: "Update a folder's name by id.",
+            inputSchema: [
+                "type": "object",
+                "properties": [
+                    "id": ["type": "string"],
+                    "name": ["type": "string"]
+                ],
+                "required": ["id", "name"]
+            ]
+        ),
+        ToolDefinition(
+            name: "omnifocus_delete_folder",
+            description: "Delete a folder by id.",
+            inputSchema: [
+                "type": "object",
+                "properties": ["id": ["type": "string"]],
+                "required": ["id"]
+            ]
+        ),
+        ToolDefinition(
+            name: "omnifocus_get_task_counts",
+            description: "Get aggregate task counts: total, available, completed, overdue, flagged, inbox.",
+            inputSchema: ["type": "object", "properties": [String: Any]()]
+        ),
+        ToolDefinition(
+            name: "omnifocus_get_project_counts",
+            description: "Get aggregate project counts: total, active, on_hold, dropped, stalled.",
+            inputSchema: ["type": "object", "properties": [String: Any]()]
+        ),
+        ToolDefinition(
+            name: "omnifocus_get_forecast",
+            description: "Get forecast view: overdue, today, flagged, and due this week task lists.",
+            inputSchema: ["type": "object", "properties": [String: Any]()]
+        ),
+        ToolDefinition(
+            name: "omnifocus_create_subtask",
+            description: "Create a subtask under an existing task.",
+            inputSchema: [
+                "type": "object",
+                "properties": [
+                    "parentId": ["type": "string"],
+                    "name": ["type": "string"],
+                    "note": ["type": "string"],
+                    "tags": ["type": "array", "items": ["type": "string"]],
+                    "due": ["type": "string", "description": "ISO 8601 date"],
+                    "defer": ["type": "string", "description": "ISO 8601 date"],
+                    "flagged": ["type": "boolean"],
+                    "estimatedMinutes": ["type": "integer"],
+                    "createMissingTags": ["type": "boolean"]
+                ],
+                "required": ["parentId", "name"]
+            ]
+        ),
+        ToolDefinition(
+            name: "omnifocus_duplicate_task",
+            description: "Duplicate a task, optionally with a new name.",
+            inputSchema: [
+                "type": "object",
+                "properties": [
+                    "id": ["type": "string"],
+                    "name": ["type": "string", "description": "Optional new name for the duplicate"]
+                ],
+                "required": ["id"]
+            ]
+        ),
+        ToolDefinition(
+            name: "omnifocus_create_tasks_batch",
+            description: "Create multiple tasks in one call.",
+            inputSchema: [
+                "type": "object",
+                "properties": [
+                    "tasks": [
+                        "type": "array",
+                        "items": [
+                            "type": "object",
+                            "properties": [
+                                "name": ["type": "string"],
+                                "project": ["type": "string"],
+                                "note": ["type": "string"],
+                                "tags": ["type": "array", "items": ["type": "string"]],
+                                "due": ["type": "string"],
+                                "defer": ["type": "string"],
+                                "flagged": ["type": "boolean"],
+                                "estimatedMinutes": ["type": "integer"]
+                            ],
+                            "required": ["name"]
+                        ]
+                    ]
+                ],
+                "required": ["tasks"]
+            ]
+        ),
+        ToolDefinition(
+            name: "omnifocus_delete_tasks_batch",
+            description: "Delete multiple tasks by id in one call.",
+            inputSchema: [
+                "type": "object",
+                "properties": [
+                    "ids": ["type": "array", "items": ["type": "string"]]
+                ],
+                "required": ["ids"]
+            ]
+        ),
+        ToolDefinition(
+            name: "omnifocus_move_tasks_batch",
+            description: "Move multiple tasks to a project in one call.",
+            inputSchema: [
+                "type": "object",
+                "properties": [
+                    "ids": ["type": "array", "items": ["type": "string"]],
+                    "project": ["type": "string", "description": "Project name to move tasks to"]
+                ],
+                "required": ["ids", "project"]
+            ]
+        ),
+        ToolDefinition(
+            name: "omnifocus_list_notifications",
+            description: "List alarms/notifications on a task.",
+            inputSchema: [
+                "type": "object",
+                "properties": ["id": ["type": "string"]],
+                "required": ["id"]
+            ]
+        ),
+        ToolDefinition(
+            name: "omnifocus_add_notification",
+            description: "Add an absolute-date alarm/notification to a task.",
+            inputSchema: [
+                "type": "object",
+                "properties": [
+                    "id": ["type": "string"],
+                    "date": ["type": "string", "description": "ISO 8601 date for the alarm"]
+                ],
+                "required": ["id", "date"]
+            ]
+        ),
+        ToolDefinition(
+            name: "omnifocus_remove_notification",
+            description: "Remove an alarm/notification from a task.",
+            inputSchema: [
+                "type": "object",
+                "properties": [
+                    "id": ["type": "string", "description": "Task id"],
+                    "notificationId": ["type": "string", "description": "Notification id to remove"]
+                ],
+                "required": ["id", "notificationId"]
+            ]
+        ),
+        ToolDefinition(
+            name: "omnifocus_set_task_repetition",
+            description: "Set or clear the repetition rule on a task using iCal RRULE format.",
+            inputSchema: [
+                "type": "object",
+                "properties": [
+                    "id": ["type": "string"],
+                    "rule": ["type": "string", "description": "iCal RRULE string, e.g. FREQ=WEEKLY;INTERVAL=1, or null to clear"],
+                    "scheduleType": ["type": "string", "enum": ["due", "defer", "fixed"], "description": "How the repetition is scheduled"]
+                ],
+                "required": ["id", "rule"]
+            ]
         )
     ]
     private let stdout = FileHandle.standardOutput
@@ -3130,6 +4206,46 @@ private final class MCPServer {
             return try callAction("delete_project", params: arguments)
         case "omnifocus_delete_tag":
             return try callAction("delete_tag", params: arguments)
+        case "omnifocus_uncomplete_task":
+            return try callAction("uncomplete_task", params: arguments)
+        case "omnifocus_uncomplete_project":
+            return try callAction("uncomplete_project", params: arguments)
+        case "omnifocus_append_to_note":
+            return try callAction("append_to_note", params: arguments)
+        case "omnifocus_search_tags":
+            return try callAction("search_tags", params: arguments)
+        case "omnifocus_set_project_status":
+            return try callAction("set_project_status", params: arguments)
+        case "omnifocus_get_folder":
+            return try callAction("get_folder", params: arguments)
+        case "omnifocus_update_folder":
+            return try callAction("update_folder", params: arguments)
+        case "omnifocus_delete_folder":
+            return try callAction("delete_folder", params: arguments)
+        case "omnifocus_get_task_counts":
+            return try callAction("get_task_counts", params: arguments)
+        case "omnifocus_get_project_counts":
+            return try callAction("get_project_counts", params: arguments)
+        case "omnifocus_get_forecast":
+            return try callAction("get_forecast", params: arguments)
+        case "omnifocus_create_subtask":
+            return try callAction("create_subtask", params: arguments)
+        case "omnifocus_duplicate_task":
+            return try callAction("duplicate_task", params: arguments)
+        case "omnifocus_create_tasks_batch":
+            return try callAction("create_tasks_batch", params: arguments)
+        case "omnifocus_delete_tasks_batch":
+            return try callAction("delete_tasks_batch", params: arguments)
+        case "omnifocus_move_tasks_batch":
+            return try callAction("move_tasks_batch", params: arguments)
+        case "omnifocus_list_notifications":
+            return try callAction("list_notifications", params: arguments)
+        case "omnifocus_add_notification":
+            return try callAction("add_notification", params: arguments)
+        case "omnifocus_remove_notification":
+            return try callAction("remove_notification", params: arguments)
+        case "omnifocus_set_task_repetition":
+            return try callAction("set_task_repetition", params: arguments)
         default:
             throw MCPError.toolNotFound(name)
         }
