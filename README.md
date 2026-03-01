@@ -27,7 +27,7 @@ Build an unsigned installer package:
 
 Optional environment overrides:
 
-- `PKG_VERSION` (default `0.1.0`)
+- `PKG_VERSION` (default `0.2.0`)
 - `PKG_IDENTIFIER` (default `com.omnifocus-mcp.cli`)
 - `PKG_INSTALL_LOCATION` (default `/usr/local/bin`)
 - `PKG_SIGN_ID` (set to sign with `pkgbuild`)
@@ -132,6 +132,53 @@ Example (generic MCP config):
 
 - `omnifocus_list_perspectives`
 - `omnifocus_eval_automation` (script, parseJson) — runs Omni Automation JS via AppleScript
+
+## Claude Cowork plugin
+
+The `cowork-plugin/` directory is a ready-made Claude Cowork plugin that connects Claude to OmniFocus with skills, commands, and the MCP connector pre-configured.
+
+### What's included
+
+**Skills** (Claude auto-invokes based on context):
+- `capture-tasks` — capture anything you mention needing to do into OmniFocus
+- `check-workload` — surfaces overdue, today, flagged, and upcoming tasks
+- `manage-projects` — create, update, review, and reorganise projects
+
+**Commands** (you invoke explicitly):
+- `/omnifocus:capture [text]` — quick-capture to inbox
+- `/omnifocus:forecast` — overdue · today · flagged · this week
+- `/omnifocus:review` — structured review: inbox → overdue → stalled projects
+
+### Install
+
+1. Build and install the binary first (see [Package](#package-pkg) above), so it lands at `/usr/local/bin/omnifocus-mcp`.
+
+2. In Claude Desktop, open **Cowork → Customize → Browse plugins** and upload the `cowork-plugin/` folder.
+
+   Or, for local testing, launch Claude Code with:
+   ```bash
+   claude --plugin-dir ./cowork-plugin
+   ```
+
+3. On first use, macOS will prompt for automation permission to control OmniFocus — allow it.
+
+### Custom binary path
+
+If your binary is not at `/usr/local/bin/omnifocus-mcp`, edit `cowork-plugin/.mcp.json` and update the `command` field:
+
+```json
+{
+  "mcpServers": {
+    "omnifocus": {
+      "type": "stdio",
+      "command": "/path/to/omnifocus-mcp",
+      "env": {
+        "OF_APP_PATH": "/Applications/OmniFocus.app"
+      }
+    }
+  }
+}
+```
 
 ## Notes
 
