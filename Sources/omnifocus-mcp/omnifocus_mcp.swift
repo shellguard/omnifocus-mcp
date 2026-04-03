@@ -1581,17 +1581,24 @@ function moveTasksBatch(params) {
   var project = findProjectByName(doc, params.project);
   if (!project) { throw new Error('Project not found'); }
   var result = [];
-  for (var i = 0; i < (params.ids || []).length; i++) {
-    var task = findTaskById(doc, params.ids[i]);
-    if (!task) { continue; }
+  var errors = [];
+  var ids = params.ids || [];
+  for (var i = 0; i < ids.length; i++) {
+    var task = findTaskById(doc, ids[i]);
+    if (!task) { errors.push({id: ids[i], error: 'Task not found'}); continue; }
     try {
       project.tasks.push(task);
     } catch (e) {
-      try { task.project = project; } catch (e2) {}
+      try { task.project = project; } catch (e2) {
+        errors.push({id: ids[i], error: e.message || String(e)});
+        continue;
+      }
     }
     result.push(taskToJSON(task));
   }
-  return result;
+  var out = {moved: result.length, tasks: result};
+  if (errors.length > 0) { out.errors = errors; }
+  return out;
 }
 
 function listNotifications(params) {
@@ -4249,14 +4256,21 @@ private let omniAutomationScript = #"""
     var project = findProjectByName(doc, params.project);
     if (!project) { throw new Error('Project not found'); }
     var result = [];
+    var errors = [];
     var ids = params.ids || [];
     for (var i = 0; i < ids.length; i++) {
       var task = findTaskById(doc, ids[i]);
-      if (!task) { continue; }
-      assignTaskToProject(task, project);
-      result.push(taskToJSON(task));
+      if (!task) { errors.push({id: ids[i], error: 'Task not found'}); continue; }
+      try {
+        assignTaskToProject(task, project);
+        result.push(taskToJSON(task));
+      } catch (e) {
+        errors.push({id: ids[i], error: e.message || String(e)});
+      }
     }
-    return result;
+    var out = {moved: result.length, tasks: result};
+    if (errors.length > 0) { out.errors = errors; }
+    return out;
   }
 
   function listNotifications(params) {
@@ -4928,12 +4942,31 @@ private let omniAutomationScript = #"""
     // Save original tags for rollback
     var origTags = [];
     try { origTags = arrayify(task.tags); } catch (e) {}
-    try {
-      applyTags(task, newTags);
-    } catch (e) {
-      // Rollback on failure
-      try { applyTags(task, origTags); } catch (e2) {}
-      throw new Error('Failed to reorder tags: ' + e.message);
+    // Clear then set — avoid applyTags fallback path which appends instead of replacing
+    var cleared = safeSet(task, 'tags', []);
+    if (!cleared) {
+      // Fallback: remove tags individually
+      try {
+        var current = arrayify(task.tags);
+        for (var ri = 0; ri < current.length; ri++) {
+          try { if (typeof task.removeTag === 'function') { task.removeTag(current[ri]); } } catch (e) {}
+        }
+      } catch (e) {}
+    }
+    var applied = safeSet(task, 'tags', newTags);
+    if (!applied) {
+      // Fallback: add tags individually
+      var addedCount = 0;
+      for (var ai = 0; ai < newTags.length; ai++) {
+        try {
+          if (typeof task.addTag === 'function') { task.addTag(newTags[ai]); addedCount++; }
+        } catch (e) {}
+      }
+      if (addedCount === 0 && newTags.length > 0) {
+        // Total failure — rollback
+        try { safeSet(task, 'tags', origTags); } catch (e2) {}
+        throw new Error('Failed to reorder tags: unable to apply new tag list');
+      }
     }
     return taskToJSON(task);
   }
@@ -5670,7 +5703,7 @@ private final class MCPServer {
                 ],
                 "required": ["id"]
             ],
-            annotations: destructiveAnnotation
+            annotations: mutatingAnnotation
         ),
         ToolDefinition(
             name: "omnifocus_complete_project",
@@ -5683,7 +5716,7 @@ private final class MCPServer {
                 ],
                 "required": ["id"]
             ],
-            annotations: destructiveAnnotation
+            annotations: mutatingAnnotation
         ),
         ToolDefinition(
             name: "omnifocus_delete_task",
@@ -5986,7 +6019,7 @@ private final class MCPServer {
                 "properties": ["id": ["type": "string"]],
                 "required": ["id"]
             ],
-            annotations: destructiveAnnotation
+            annotations: mutatingAnnotation
         ),
         ToolDefinition(
             name: "omnifocus_import_taskpaper",
@@ -6507,15 +6540,21 @@ private final class MCPServer {
             }
             let allowDestructive = arguments["allowDestructive"] as? Bool ?? false
             if !allowDestructive {
-                let destructivePatterns = [
-                    "\\.delete\\s*\\(", "\\.remove\\s*\\(", "\\bdeleteObject\\s*\\(",
-                    "\\.drop\\s*\\(", "\\.markComplete\\s*\\(", "\\.markIncomplete\\s*\\(",
+                let destructiveKeywords = [
+                    "delete", "remove", "drop", "markComplete", "markIncomplete",
+                    "cleanUp"
+                ]
+                // Match both dot-notation (.delete() ) and bracket-notation (['delete'](), ["delete"]())
+                let dotPatterns = destructiveKeywords.map { "\\.\($0)\\s*\\(" }
+                let bracketPatterns = destructiveKeywords.map { "\\[['\"]\\s*\($0)\\s*['\"]\\]\\s*\\(" }
+                let namedFunctionPatterns = [
+                    "\\bdeleteObject\\s*\\(",
                     "\\bconvertTasksToProjects\\s*\\(", "\\bmoveSections\\s*\\(",
                     "\\bmoveTags\\s*\\(", "\\bduplicateSections\\s*\\(",
                     "Task\\.byParsingTransportText\\s*\\(",
-                    "\\bcopyTasksToPasteboard\\s*\\(", "\\bpasteTasksFromPasteboard\\s*\\(",
-                    "\\bcleanUp\\s*\\("
+                    "\\bcopyTasksToPasteboard\\s*\\(", "\\bpasteTasksFromPasteboard\\s*\\("
                 ]
+                let destructivePatterns = dotPatterns + bracketPatterns + namedFunctionPatterns
                 let combined = destructivePatterns.joined(separator: "|")
                 if let regex = try? NSRegularExpression(pattern: combined, options: []),
                    regex.firstMatch(in: script, options: [], range: NSRange(script.startIndex..., in: script)) != nil {
