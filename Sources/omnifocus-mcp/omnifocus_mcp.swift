@@ -260,7 +260,7 @@ function normalizeTaskStatus(ts) {
   if (s.indexOf('completed') !== -1) { return 'completed'; }
   if (s.indexOf('dropped') !== -1) { return 'dropped'; }
   if (s.indexOf('blocked') !== -1) { return 'blocked'; }
-  if (s.indexOf('dueSoon') !== -1 || s.indexOf('duesoon') !== -1) { return 'dueSoon'; }
+  if (s.indexOf('duesoon') !== -1) { return 'dueSoon'; }
   if (s.indexOf('next') !== -1) { return 'next'; }
   if (s.indexOf('overdue') !== -1) { return 'overdue'; }
   return s;
@@ -1825,14 +1825,12 @@ function convertToProject(params) {
   var name = safeCall(task, 'name');
   var note = safeCall(task, 'note');
   var flagged = safeCall(task, 'flagged');
-  var dueDate = toISO(firstValue(task, ['dueDate']));
-  var deferDate = toISO(firstValue(task, ['deferDate']));
+  var due = firstValue(task, ['dueDate']);
+  var defer = firstValue(task, ['deferDate']);
   var project = doc.make({new: 'project', withProperties: {name: name}});
   if (note) { safeSet(project, 'note', note); }
   if (flagged) { safeSet(project, 'flagged', flagged); }
-  var due = parseDate(dueDate);
   if (due) { safeSet(project, 'dueDate', due); }
-  var defer = parseDate(deferDate);
   if (defer) { safeSet(project, 'deferDate', defer); }
   // Move children — track failures
   var children = arrayify(firstValue(task, ['tasks', 'children', 'flattenedTasks']));
@@ -2705,7 +2703,7 @@ private let omniAutomationScript = #"""
     if (s.indexOf('completed') !== -1) { return 'completed'; }
     if (s.indexOf('dropped') !== -1) { return 'dropped'; }
     if (s.indexOf('blocked') !== -1) { return 'blocked'; }
-    if (s.indexOf('dueSoon') !== -1 || s.indexOf('duesoon') !== -1) { return 'dueSoon'; }
+    if (s.indexOf('duesoon') !== -1) { return 'dueSoon'; }
     if (s.indexOf('next') !== -1) { return 'next'; }
     if (s.indexOf('overdue') !== -1) { return 'overdue'; }
     return s;
@@ -5336,6 +5334,21 @@ struct OmniFocusMCPServer {
 }
 
 private final class MCPServer {
+    private static let destructiveScriptRegex: NSRegularExpression = {
+        let keywords = ["delete", "remove", "drop", "markComplete", "markIncomplete", "cleanUp"]
+        let dotPatterns = keywords.map { "\\.\($0)\\s*\\(" }
+        let bracketPatterns = keywords.map { "\\[['\"]\\s*\($0)\\s*['\"]\\]\\s*\\(" }
+        let namedPatterns = [
+            "\\bdeleteObject\\s*\\(",
+            "\\bconvertTasksToProjects\\s*\\(", "\\bmoveSections\\s*\\(",
+            "\\bmoveTags\\s*\\(", "\\bduplicateSections\\s*\\(",
+            "Task\\.byParsingTransportText\\s*\\(",
+            "\\bcopyTasksToPasteboard\\s*\\(", "\\bpasteTasksFromPasteboard\\s*\\("
+        ]
+        let combined = (dotPatterns + bracketPatterns + namedPatterns).joined(separator: "|")
+        return try! NSRegularExpression(pattern: combined, options: [])
+    }()
+
     private let tools: [ToolDefinition] = [
         ToolDefinition(
             name: "omnifocus_list_tasks",
@@ -5531,13 +5544,7 @@ private final class MCPServer {
                 ],
                 "required": ["script"]
             ],
-            annotations: [
-                "title": "Evaluate Omni Automation Script",
-                "destructiveHint": true,
-                "readOnlyHint": false,
-                "idempotentHint": false,
-                "openWorldHint": false
-            ]
+            annotations: destructiveAnnotation.merging(["title": "Evaluate Omni Automation Script"]) { _, new in new }
         ),
         ToolDefinition(
             name: "omnifocus_get_task",
@@ -6378,8 +6385,7 @@ private final class MCPServer {
     ]
     private let stdout = FileHandle.standardOutput
     private let stdin = FileHandle.standardInput
-    private var automationBackendAvailable: Bool?
-    private var automationBackendProbeTime: Date?
+    private var automationBackendProbe: (available: Bool, time: Date)?
 
     private let maxBufferSize = 10 * 1024 * 1024 // 10 MB
 
@@ -6540,24 +6546,7 @@ private final class MCPServer {
             }
             let allowDestructive = arguments["allowDestructive"] as? Bool ?? false
             if !allowDestructive {
-                let destructiveKeywords = [
-                    "delete", "remove", "drop", "markComplete", "markIncomplete",
-                    "cleanUp"
-                ]
-                // Match both dot-notation (.delete() ) and bracket-notation (['delete'](), ["delete"]())
-                let dotPatterns = destructiveKeywords.map { "\\.\($0)\\s*\\(" }
-                let bracketPatterns = destructiveKeywords.map { "\\[['\"]\\s*\($0)\\s*['\"]\\]\\s*\\(" }
-                let namedFunctionPatterns = [
-                    "\\bdeleteObject\\s*\\(",
-                    "\\bconvertTasksToProjects\\s*\\(", "\\bmoveSections\\s*\\(",
-                    "\\bmoveTags\\s*\\(", "\\bduplicateSections\\s*\\(",
-                    "Task\\.byParsingTransportText\\s*\\(",
-                    "\\bcopyTasksToPasteboard\\s*\\(", "\\bpasteTasksFromPasteboard\\s*\\("
-                ]
-                let destructivePatterns = dotPatterns + bracketPatterns + namedFunctionPatterns
-                let combined = destructivePatterns.joined(separator: "|")
-                if let regex = try? NSRegularExpression(pattern: combined, options: []),
-                   regex.firstMatch(in: script, options: [], range: NSRange(script.startIndex..., in: script)) != nil {
+                if MCPServer.destructiveScriptRegex.firstMatch(in: script, options: [], range: NSRange(script.startIndex..., in: script)) != nil {
                     throw MCPError.invalidParams(
                         "Script contains destructive operations. Use the dedicated MCP tools for delete/drop/move/complete operations, or pass allowDestructive: true to override this safety check."
                     )
@@ -6905,21 +6894,17 @@ private final class MCPServer {
 
     private func isAutomationBackendAvailable() -> Bool {
         // Re-probe every 5 minutes in case OmniFocus was restarted
-        if let cached = automationBackendAvailable,
-           let probeTime = automationBackendProbeTime,
-           Date().timeIntervalSince(probeTime) < 300 {
-            return cached
+        if let probe = automationBackendProbe, Date().timeIntervalSince(probe.time) < 300 {
+            return probe.available
         }
-        let probe = "JSON.stringify({hasDatabase: (typeof database !== 'undefined') || (typeof document !== 'undefined' && document && typeof document.database !== 'undefined') || (typeof flattenedProjects !== 'undefined') || (typeof moveSections !== 'undefined')})"
-        if let result = try? runOmniAutomationScript(probe, parseJson: true),
+        let probeScript = "JSON.stringify({hasDatabase: (typeof database !== 'undefined') || (typeof document !== 'undefined' && document && typeof document.database !== 'undefined') || (typeof flattenedProjects !== 'undefined') || (typeof moveSections !== 'undefined')})"
+        if let result = try? runOmniAutomationScript(probeScript, parseJson: true),
            let dict = result as? [String: Any],
            let hasDatabase = dict["hasDatabase"] as? Bool {
-            automationBackendAvailable = hasDatabase
-            automationBackendProbeTime = Date()
+            automationBackendProbe = (hasDatabase, Date())
             return hasDatabase
         }
-        automationBackendAvailable = false
-        automationBackendProbeTime = Date()
+        automationBackendProbe = (false, Date())
         return false
     }
 
