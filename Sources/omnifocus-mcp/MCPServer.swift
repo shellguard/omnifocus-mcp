@@ -14,7 +14,7 @@ final class MCPServer {
         let dotPatterns = keywords.map { "\\.\($0)\\s*\\(" }
         let bracketPatterns = keywords.map { "\\[['\"]\\s*\($0)\\s*['\"]\\]\\s*\\(" }
         let namedPatterns = [
-            "\\bdeleteObject\\s*\\(",
+            "\\bdeleteObject\\s*\\(", "\\bcleanUp\\s*\\(",
             "\\bconvertTasksToProjects\\s*\\(", "\\bmoveSections\\s*\\(",
             "\\bmoveTags\\s*\\(", "\\bduplicateSections\\s*\\(",
             "Task\\.byParsingTransportText\\s*\\(",

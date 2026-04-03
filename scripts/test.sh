@@ -118,13 +118,13 @@ assert_not_contains "no error"         "$LIST_OUT" '"error":'
 # Count tool entries — count "name":"omnifocus_ occurrences inside "tools" list.
 # Each tool definition has exactly one name key starting with omnifocus_.
 TOOL_COUNT=$(printf '%s' "$LIST_OUT" | grep -oF '"name":"omnifocus_' | wc -l | tr -d ' ')
-if [ "$TOOL_COUNT" -eq 51 ]; then
-  pass "exactly 51 tools returned (got $TOOL_COUNT)"
+if [ "$TOOL_COUNT" -eq 84 ]; then
+  pass "exactly 84 tools returned (got $TOOL_COUNT)"
 else
-  fail "tool count" "expected 51, got $TOOL_COUNT"
+  fail "tool count" "expected 84, got $TOOL_COUNT"
 fi
 
-# Verify ALL 51 tool names are present
+# Verify ALL 84 tool names are present
 for tool in \
   omnifocus_list_tasks omnifocus_list_inbox omnifocus_list_projects \
   omnifocus_list_tags omnifocus_list_perspectives omnifocus_list_folders \
@@ -144,18 +144,54 @@ for tool in \
   omnifocus_create_subtask omnifocus_duplicate_task \
   omnifocus_create_tasks_batch omnifocus_delete_tasks_batch omnifocus_move_tasks_batch \
   omnifocus_list_notifications omnifocus_add_notification \
-  omnifocus_remove_notification omnifocus_set_task_repetition; do
+  omnifocus_remove_notification omnifocus_set_task_repetition \
+  omnifocus_mark_reviewed omnifocus_drop_task omnifocus_import_taskpaper \
+  omnifocus_add_relative_notification omnifocus_move_tag omnifocus_move_folder \
+  omnifocus_convert_task_to_project omnifocus_duplicate_project \
+  omnifocus_get_forecast_tag omnifocus_clean_up omnifocus_get_settings \
+  omnifocus_list_linked_files omnifocus_add_linked_file omnifocus_remove_linked_file \
+  omnifocus_search_projects omnifocus_search_folders omnifocus_search_tasks_native \
+  omnifocus_lookup_url omnifocus_get_forecast_days \
+  omnifocus_get_focus omnifocus_set_focus omnifocus_undo omnifocus_redo omnifocus_save \
+  omnifocus_duplicate_tasks_batch omnifocus_duplicate_tags \
+  omnifocus_move_projects_batch omnifocus_reorder_task_tags \
+  omnifocus_copy_tasks omnifocus_paste_tasks \
+  omnifocus_next_repetition_date omnifocus_set_forecast_tag \
+  omnifocus_set_notification_repeat; do
   assert_contains "tool present: $tool" "$LIST_OUT" "\"$tool\""
 done
 
 # ─── 3. Tool description content ──────────────────────────────────────────────
-header "3. Tool descriptions"
+header "3. Tool descriptions & annotations"
 
-assert_contains "eval_automation has security warning" \
-  "$LIST_OUT" "WARNING"
+assert_contains "eval_automation has DANGER warning" \
+  "$LIST_OUT" "DANGER"
+
+assert_contains "eval_automation mentions allowDestructive" \
+  "$LIST_OUT" "allowDestructive"
 
 assert_contains "delete_folder warns about cascade" \
   "$LIST_OUT" "irreversibly deletes the folder and ALL"
+
+# MCP annotations present on all tools
+assert_contains "annotations field exists"     "$LIST_OUT" '"annotations":'
+assert_contains "readOnlyHint present"         "$LIST_OUT" '"readOnlyHint"'
+assert_contains "destructiveHint present"      "$LIST_OUT" '"destructiveHint"'
+assert_contains "idempotentHint present"       "$LIST_OUT" '"idempotentHint"'
+
+# Count annotation categories
+RO_COUNT=$(printf '%s' "$LIST_OUT" | grep -oF '"readOnlyHint":true' | wc -l | tr -d ' ')
+DE_COUNT=$(printf '%s' "$LIST_OUT" | grep -oF '"destructiveHint":true' | wc -l | tr -d ' ')
+if [ "$RO_COUNT" -eq 32 ]; then
+  pass "32 read-only tools annotated (got $RO_COUNT)"
+else
+  fail "read-only annotation count" "expected 32, got $RO_COUNT"
+fi
+if [ "$DE_COUNT" -eq 8 ]; then
+  pass "8 destructive tools annotated (got $DE_COUNT)"
+else
+  fail "destructive annotation count" "expected 8, got $DE_COUNT"
+fi
 
 # ─── 4. tools/call — error cases (no OmniFocus needed) ───────────────────────
 header "4. tools/call error handling"
@@ -182,6 +218,9 @@ assert_contains "unknown method code -32601"         "$UNKNOWN_METHOD_OUT" '-326
 # Parse error (malformed JSON) → -32700
 PARSE_ERR_OUT=$(printf 'not json at all\n' | OF_BACKEND=jxa "$BINARY" 2>/dev/null)
 assert_contains "malformed JSON returns parse error" "$PARSE_ERR_OUT" '-32700'
+
+# Parse error returns null id (JSON-RPC 2.0 spec)
+assert_contains "parse error has null id"            "$PARSE_ERR_OUT" '"id":null'
 
 # Non-object (array is valid JSON but not a JSON-RPC message) → -32600
 NOT_OBJ_OUT=$(rpc '[1,2,3]')
@@ -228,7 +267,20 @@ for tool in \
   omnifocus_create_subtask omnifocus_duplicate_task \
   omnifocus_create_tasks_batch omnifocus_delete_tasks_batch omnifocus_move_tasks_batch \
   omnifocus_list_notifications omnifocus_add_notification \
-  omnifocus_remove_notification omnifocus_set_task_repetition; do
+  omnifocus_remove_notification omnifocus_set_task_repetition \
+  omnifocus_mark_reviewed omnifocus_drop_task omnifocus_import_taskpaper \
+  omnifocus_add_relative_notification omnifocus_move_tag omnifocus_move_folder \
+  omnifocus_convert_task_to_project omnifocus_duplicate_project \
+  omnifocus_get_forecast_tag omnifocus_clean_up omnifocus_get_settings \
+  omnifocus_list_linked_files omnifocus_add_linked_file omnifocus_remove_linked_file \
+  omnifocus_search_projects omnifocus_search_folders omnifocus_search_tasks_native \
+  omnifocus_lookup_url omnifocus_get_forecast_days \
+  omnifocus_get_focus omnifocus_set_focus omnifocus_undo omnifocus_redo omnifocus_save \
+  omnifocus_duplicate_tasks_batch omnifocus_duplicate_tags \
+  omnifocus_move_projects_batch omnifocus_reorder_task_tags \
+  omnifocus_copy_tasks omnifocus_paste_tasks \
+  omnifocus_next_repetition_date omnifocus_set_forecast_tag \
+  omnifocus_set_notification_repeat; do
   dispatch_check "$tool"
 done
 
@@ -293,6 +345,41 @@ INJECT_OUT=$(printf '%s\n' \
     "$BINARY" 2>/dev/null || true)
 assert_contains     "unsafe OF_APP_PATH is rejected"      "$INJECT_OUT" '"error":'
 assert_contains     "error cites unsafe characters"       "$INJECT_OUT" "unsafe characters"
+
+# ─── 10. eval_automation deny-list ────────────────────────────────────────────
+header "10. eval_automation deny-list"
+
+# Destructive dot-notation blocked
+DENY_DOT=$(rpc '{"jsonrpc":"2.0","id":60,"method":"tools/call","params":{"name":"omnifocus_eval_automation","arguments":{"script":"task.delete()"}}}')
+assert_contains "dot-notation .delete() blocked"    "$DENY_DOT" '"error":'
+assert_contains "error mentions destructive"        "$DENY_DOT" 'destructive'
+
+# Destructive bracket-notation blocked
+DENY_BRACKET=$(rpc "{\"jsonrpc\":\"2.0\",\"id\":61,\"method\":\"tools/call\",\"params\":{\"name\":\"omnifocus_eval_automation\",\"arguments\":{\"script\":\"task['delete']()\"}}}")
+assert_contains "bracket-notation ['delete']() blocked" "$DENY_BRACKET" '"error":'
+
+# Other destructive patterns
+DENY_DROP=$(rpc '{"jsonrpc":"2.0","id":62,"method":"tools/call","params":{"name":"omnifocus_eval_automation","arguments":{"script":"task.drop(false)"}}}')
+assert_contains ".drop() blocked"                   "$DENY_DROP" '"error":'
+
+DENY_DELETEOBJ=$(rpc '{"jsonrpc":"2.0","id":63,"method":"tools/call","params":{"name":"omnifocus_eval_automation","arguments":{"script":"deleteObject(task)"}}}')
+assert_contains "deleteObject() blocked"            "$DENY_DELETEOBJ" '"error":'
+
+DENY_CLEANUP=$(rpc '{"jsonrpc":"2.0","id":64,"method":"tools/call","params":{"name":"omnifocus_eval_automation","arguments":{"script":"cleanUp()"}}}')
+assert_contains "cleanUp() blocked"                 "$DENY_CLEANUP" '"error":'
+
+# Safe script passes deny-list
+SAFE_SCRIPT=$(rpc '{"jsonrpc":"2.0","id":65,"method":"tools/call","params":{"name":"omnifocus_eval_automation","arguments":{"script":"JSON.stringify({ok:1})"}}}')
+assert_not_contains "safe script not blocked"       "$SAFE_SCRIPT" 'destructive'
+
+# allowDestructive override
+ALLOW_DEST=$(rpc '{"jsonrpc":"2.0","id":66,"method":"tools/call","params":{"name":"omnifocus_eval_automation","arguments":{"script":"JSON.stringify({ok:1})","allowDestructive":true}}}')
+assert_not_contains "allowDestructive passes"       "$ALLOW_DEST" 'destructive'
+
+# Missing script parameter
+NO_SCRIPT=$(rpc '{"jsonrpc":"2.0","id":67,"method":"tools/call","params":{"name":"omnifocus_eval_automation","arguments":{}}}')
+assert_contains "missing script returns error"      "$NO_SCRIPT" '"error":'
+assert_contains "error mentions Missing script"     "$NO_SCRIPT" 'Missing script'
 
 # ─── Summary ──────────────────────────────────────────────────────────────────
 printf "\n${BOLD}Results: %d passed, %d failed${NC}\n" "$PASS" "$FAIL"
