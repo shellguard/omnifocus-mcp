@@ -342,7 +342,7 @@ function projectToJSON(project) {
     dueDate: toISO(firstValue(project, ['dueDate'])),
     deferDate: toISO(firstValue(project, ['deferDate'])),
     flagged: safeCall(project, 'flagged'),
-    sequential: !safeCall(project, 'parallel'),
+    sequential: safeCall(project, 'parallel') !== null ? !safeCall(project, 'parallel') : null,
     containsSingletonActions: safeCall(project, 'containsSingletonActions'),
     estimatedMinutes: safeCall(project, 'estimatedMinutes'),
     lastReviewDate: toISO(firstValue(project, ['lastReviewDate'])),
@@ -2752,15 +2752,6 @@ private let omniAutomationScript = #"""
     };
   }
 
-  function appendNote(task, appendText) {
-    if (!appendText) {
-      return;
-    }
-    var existing = safeCall(task, 'note') || '';
-    var separator = existing ? '\n' : '';
-    safeSet(task, 'note', existing + separator + appendText);
-  }
-
   function projectToJSON(project) {
     var status = firstValue(project, ['status', 'projectStatus']);
     var rawStatus = status ? String(status) : null;
@@ -4209,6 +4200,8 @@ private let omniAutomationScript = #"""
     if (project) {
       newParams.project = safeCall(project, 'name');
       newParams.createMissingProject = false;
+    } else {
+      newParams.inbox = true;
     }
     return createTask(newParams);
   }
@@ -6506,41 +6499,13 @@ private final class MCPServer {
         }
     }
 
+    private static let toolNameToAction: [String: String] = [
+        "omnifocus_convert_task_to_project": "convert_to_project"
+    ]
+
     private func callTool(named name: String, arguments: [String: Any]) throws -> Any {
-        switch name {
-        case "omnifocus_list_tasks":
-            return try callAction("list_tasks", params: arguments)
-        case "omnifocus_list_inbox":
-            return try callAction("list_inbox", params: arguments)
-        case "omnifocus_list_projects":
-            return try callAction("list_projects", params: arguments)
-        case "omnifocus_list_tags":
-            return try callAction("list_tags", params: arguments)
-        case "omnifocus_list_perspectives":
-            return try callAction("list_perspectives", params: arguments)
-        case "omnifocus_list_folders":
-            return try callAction("list_folders", params: arguments)
-        case "omnifocus_create_folder":
-            return try callAction("create_folder", params: arguments)
-        case "omnifocus_move_project":
-            return try callAction("move_project", params: arguments)
-        case "omnifocus_list_flagged":
-            return try callAction("list_flagged", params: arguments)
-        case "omnifocus_list_overdue":
-            return try callAction("list_overdue", params: arguments)
-        case "omnifocus_list_available":
-            return try callAction("list_available", params: arguments)
-        case "omnifocus_search_tasks":
-            return try callAction("search_tasks", params: arguments)
-        case "omnifocus_list_task_children":
-            return try callAction("list_task_children", params: arguments)
-        case "omnifocus_get_task_parent":
-            return try callAction("get_task_parent", params: arguments)
-        case "omnifocus_process_inbox":
-            return try callAction("process_inbox", params: arguments)
-        case "omnifocus_set_project_sequential":
-            return try callAction("set_project_sequential", params: arguments)
-        case "omnifocus_eval_automation":
+        // Special case: eval_automation has inline safety logic
+        if name == "omnifocus_eval_automation" {
             guard let script = arguments["script"] as? String else {
                 throw MCPError.invalidParams("Missing script")
             }
@@ -6554,143 +6519,15 @@ private final class MCPServer {
             }
             let parseJson = arguments["parseJson"] as? Bool ?? true
             return try runOmniAutomationScript(script, parseJson: parseJson)
-        case "omnifocus_get_task":
-            return try callAction("get_task", params: arguments)
-        case "omnifocus_get_project":
-            return try callAction("get_project", params: arguments)
-        case "omnifocus_get_tag":
-            return try callAction("get_tag", params: arguments)
-        case "omnifocus_create_task":
-            return try callAction("create_task", params: arguments)
-        case "omnifocus_create_project":
-            return try callAction("create_project", params: arguments)
-        case "omnifocus_create_tag":
-            return try callAction("create_tag", params: arguments)
-        case "omnifocus_update_task":
-            return try callAction("update_task", params: arguments)
-        case "omnifocus_update_project":
-            return try callAction("update_project", params: arguments)
-        case "omnifocus_update_tag":
-            return try callAction("update_tag", params: arguments)
-        case "omnifocus_complete_task":
-            return try callAction("complete_task", params: arguments)
-        case "omnifocus_complete_project":
-            return try callAction("complete_project", params: arguments)
-        case "omnifocus_delete_task":
-            return try callAction("delete_task", params: arguments)
-        case "omnifocus_delete_project":
-            return try callAction("delete_project", params: arguments)
-        case "omnifocus_delete_tag":
-            return try callAction("delete_tag", params: arguments)
-        case "omnifocus_uncomplete_task":
-            return try callAction("uncomplete_task", params: arguments)
-        case "omnifocus_uncomplete_project":
-            return try callAction("uncomplete_project", params: arguments)
-        case "omnifocus_append_to_note":
-            return try callAction("append_to_note", params: arguments)
-        case "omnifocus_search_tags":
-            return try callAction("search_tags", params: arguments)
-        case "omnifocus_set_project_status":
-            return try callAction("set_project_status", params: arguments)
-        case "omnifocus_get_folder":
-            return try callAction("get_folder", params: arguments)
-        case "omnifocus_update_folder":
-            return try callAction("update_folder", params: arguments)
-        case "omnifocus_delete_folder":
-            return try callAction("delete_folder", params: arguments)
-        case "omnifocus_get_task_counts":
-            return try callAction("get_task_counts", params: arguments)
-        case "omnifocus_get_project_counts":
-            return try callAction("get_project_counts", params: arguments)
-        case "omnifocus_get_forecast":
-            return try callAction("get_forecast", params: arguments)
-        case "omnifocus_create_subtask":
-            return try callAction("create_subtask", params: arguments)
-        case "omnifocus_duplicate_task":
-            return try callAction("duplicate_task", params: arguments)
-        case "omnifocus_create_tasks_batch":
-            return try callAction("create_tasks_batch", params: arguments)
-        case "omnifocus_delete_tasks_batch":
-            return try callAction("delete_tasks_batch", params: arguments)
-        case "omnifocus_move_tasks_batch":
-            return try callAction("move_tasks_batch", params: arguments)
-        case "omnifocus_list_notifications":
-            return try callAction("list_notifications", params: arguments)
-        case "omnifocus_add_notification":
-            return try callAction("add_notification", params: arguments)
-        case "omnifocus_remove_notification":
-            return try callAction("remove_notification", params: arguments)
-        case "omnifocus_set_task_repetition":
-            return try callAction("set_task_repetition", params: arguments)
-        case "omnifocus_mark_reviewed":
-            return try callAction("mark_reviewed", params: arguments)
-        case "omnifocus_drop_task":
-            return try callAction("drop_task", params: arguments)
-        case "omnifocus_import_taskpaper":
-            return try callAction("import_taskpaper", params: arguments)
-        case "omnifocus_add_relative_notification":
-            return try callAction("add_relative_notification", params: arguments)
-        case "omnifocus_move_tag":
-            return try callAction("move_tag", params: arguments)
-        case "omnifocus_move_folder":
-            return try callAction("move_folder", params: arguments)
-        case "omnifocus_convert_task_to_project":
-            return try callAction("convert_to_project", params: arguments)
-        case "omnifocus_duplicate_project":
-            return try callAction("duplicate_project", params: arguments)
-        case "omnifocus_get_forecast_tag":
-            return try callAction("get_forecast_tag", params: arguments)
-        case "omnifocus_clean_up":
-            return try callAction("clean_up", params: arguments)
-        case "omnifocus_get_settings":
-            return try callAction("get_settings", params: arguments)
-        case "omnifocus_list_linked_files":
-            return try callAction("list_linked_files", params: arguments)
-        case "omnifocus_add_linked_file":
-            return try callAction("add_linked_file", params: arguments)
-        case "omnifocus_remove_linked_file":
-            return try callAction("remove_linked_file", params: arguments)
-        case "omnifocus_search_projects":
-            return try callAction("search_projects", params: arguments)
-        case "omnifocus_search_folders":
-            return try callAction("search_folders", params: arguments)
-        case "omnifocus_search_tasks_native":
-            return try callAction("search_tasks_native", params: arguments)
-        case "omnifocus_lookup_url":
-            return try callAction("lookup_url", params: arguments)
-        case "omnifocus_get_forecast_days":
-            return try callAction("get_forecast_days", params: arguments)
-        case "omnifocus_get_focus":
-            return try callAction("get_focus", params: arguments)
-        case "omnifocus_set_focus":
-            return try callAction("set_focus", params: arguments)
-        case "omnifocus_undo":
-            return try callAction("undo", params: arguments)
-        case "omnifocus_redo":
-            return try callAction("redo", params: arguments)
-        case "omnifocus_save":
-            return try callAction("save", params: arguments)
-        case "omnifocus_duplicate_tasks_batch":
-            return try callAction("duplicate_tasks_batch", params: arguments)
-        case "omnifocus_duplicate_tags":
-            return try callAction("duplicate_tags", params: arguments)
-        case "omnifocus_move_projects_batch":
-            return try callAction("move_projects_batch", params: arguments)
-        case "omnifocus_reorder_task_tags":
-            return try callAction("reorder_task_tags", params: arguments)
-        case "omnifocus_copy_tasks":
-            return try callAction("copy_tasks", params: arguments)
-        case "omnifocus_paste_tasks":
-            return try callAction("paste_tasks", params: arguments)
-        case "omnifocus_next_repetition_date":
-            return try callAction("next_repetition_date", params: arguments)
-        case "omnifocus_set_forecast_tag":
-            return try callAction("set_forecast_tag", params: arguments)
-        case "omnifocus_set_notification_repeat":
-            return try callAction("set_notification_repeat", params: arguments)
-        default:
+        }
+        // All other tools: derive action name from tool name
+        guard name.hasPrefix("omnifocus_"),
+              tools.contains(where: { $0.name == name }) else {
             throw MCPError.toolNotFound(name)
         }
+        let action = MCPServer.toolNameToAction[name]
+            ?? String(name.dropFirst("omnifocus_".count))
+        return try callAction(action, params: arguments)
     }
 
     private func callAction(_ action: String, params: [String: Any]) throws -> Any {
