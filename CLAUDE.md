@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-A single-file Swift MCP server (`Sources/omnifocus-mcp/omnifocus_mcp.swift`) that exposes OmniFocus as MCP tools. All logic lives in one ~6700-line file. **No external dependencies** — stdlib only.
+A multi-file Swift MCP server that exposes OmniFocus as MCP tools. **No external dependencies** — stdlib only.
 
 ## Build & Test
 
@@ -15,23 +15,41 @@ Binary lands at `.build/release/omnifocus-mcp`. Swift 6.2+ required.
 
 ## Architecture
 
-The file has four logical sections (in order):
+### File Structure
 
-1. **`jxaScript`** (lines ~35–1450) — JS string executed by `osascript -l JavaScript`. Used as fallback when Omni Automation is unavailable.
-2. **`omniAutomationScript`** (lines ~1450–3050) — JS string executed by OmniFocus's own JS engine via AppleScript `evaluate javascript`. Preferred backend.
-3. **`tools` array** (lines ~3050–3450) — `ToolDefinition` structs (name, description, inputSchema).
-4. **`callTool()` / `callAction()`** (lines ~3450+) — Swift dispatch: tool name → action string → backend.
+| File | Purpose | Lines |
+|---|---|---|
+| `ToolDefinition.swift` | `ToolDefinition` struct, annotation constants | ~18 |
+| `MCPError.swift` | Error types for MCP protocol errors | ~27 |
+| `JSShared.swift` | 14 shared JS utility functions (injected into both backends) | ~170 |
+| `JXAScript.swift` | JXA backend JS — composed from shared + JXA-specific code | ~2200 |
+| `OmniAutomationScript.swift` | OmniAutomation backend JS — preferred backend | ~2750 |
+| `Tools.swift` | `allTools` array — 84 `ToolDefinition` structs with annotations | ~1040 |
+| `MCPServer.swift` | MCP JSON-RPC server: protocol handling, dispatch, script execution | ~430 |
+
+### JS Backend Composition
+
+Both JS backends share 14 utility functions defined in `JSShared.swift`. These are inlined into each script at Swift string concatenation time:
+
+```
+JXA script = JXA preamble + shared utilities + JXA-specific functions + dispatch
+OmniAutomation script = OA preamble + shared utilities + OA-specific functions + dispatch
+```
 
 Both JS scripts must stay in sync whenever a new action is added.
 
+### Tool Dispatch
+
+`callTool()` dynamically derives the action name from the tool name by stripping the `omnifocus_` prefix. No manual switch case needed — adding a tool to `allTools` in `Tools.swift` is sufficient. Exception: `omnifocus_eval_automation` has inline safety logic (deny-list).
+
 ## Adding a New Tool — Checklist
 
-1. Add the JS function to **`jxaScript`** (before `var input = readInput();`)
-2. Add a `case` to the **`jxaScript` switch** (before `default:`)
-3. Add the equivalent JS function to **`omniAutomationScript`** (before `var input = JSON.parse(...)`)
-4. Add a `case` to the **`omniAutomationScript` switch** (before `default:`)
-5. Add a `ToolDefinition` to the **`tools` array**
-6. Add a `case` to **`callTool()`** calling `callAction("action_name", params: arguments)`
+1. If the function uses only shared utilities, add to **`JSShared.swift`** (otherwise add to each backend)
+2. Add the JS function to **`JXAScript.swift`**
+3. Add a `case` to the **`JXAScript.swift` switch** (before `default:`)
+4. Add the equivalent JS function to **`OmniAutomationScript.swift`**
+5. Add a `case` to the **`OmniAutomationScript.swift` switch** (before `default:`)
+6. Add a `ToolDefinition` to **`Tools.swift`** (dispatch is automatic — no `callTool()` change needed)
 7. Run `swift build -c release` to verify
 
 ## Key JS Utilities (available in both scripts)
