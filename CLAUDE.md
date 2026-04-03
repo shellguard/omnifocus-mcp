@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-A single-file Swift MCP server (`Sources/omnifocus-mcp/omnifocus_mcp.swift`) that exposes OmniFocus as MCP tools. All logic lives in one ~4500-line file. **No external dependencies** — stdlib only.
+A single-file Swift MCP server (`Sources/omnifocus-mcp/omnifocus_mcp.swift`) that exposes OmniFocus as MCP tools. All logic lives in one ~6700-line file. **No external dependencies** — stdlib only.
 
 ## Build & Test
 
@@ -64,7 +64,7 @@ Both JS scripts must stay in sync whenever a new action is added.
 - Override: `OF_BACKEND=jxa` or `OF_BACKEND=automation`
 - App path: `OF_APP_PATH=/Applications/OmniFocus.app`
 
-## Current Tool Count: 51
+## Current Tool Count: 84
 
 ### Original 31 tools
 `list_tasks`, `list_inbox`, `list_projects`, `list_tags`, `list_perspectives`, `list_folders`, `create_folder`, `move_project`, `list_flagged`, `list_overdue`, `list_available`, `search_tasks`, `list_task_children`, `get_task_parent`, `process_inbox`, `set_project_sequential`, `eval_automation`, `get_task`, `get_project`, `get_tag`, `create_task`, `create_project`, `create_tag`, `update_task`, `update_project`, `update_tag`, `complete_task`, `complete_project`, `delete_task`, `delete_project`, `delete_tag`
@@ -91,7 +91,69 @@ Both JS scripts must stay in sync whenever a new action is added.
 | `omnifocus_list_notifications` | `list_notifications` | Returns task alarms as `{id, kind, fireDate}` |
 | `omnifocus_add_notification` | `add_notification` | Absolute-date alarm via `date` (ISO 8601) |
 | `omnifocus_remove_notification` | `remove_notification` | Params: `id` (task), `notificationId` |
-| `omnifocus_set_task_repetition` | `set_task_repetition` | `rule` (iCal RRULE string), `scheduleType` (due/defer/fixed) |
+| `omnifocus_set_task_repetition` | `set_task_repetition` | `rule` (iCal RRULE string), `scheduleType`, `anchorDateKey`, `catchUpAutomatically` |
+
+### Added in Pro 4.8.8 enhancement (11 tools)
+| Tool | Action | Notes |
+|---|---|---|
+| `omnifocus_mark_reviewed` | `mark_reviewed` | `project.markReviewed()` or set `lastReviewDate` |
+| `omnifocus_drop_task` | `drop_task` | `task.drop(false)` — preserves unlike delete |
+| `omnifocus_import_taskpaper` | `import_taskpaper` | OmniAuto: `Task.byParsingTransportText()`, JXA: line-by-line |
+| `omnifocus_add_relative_notification` | `add_relative_notification` | `beforeSeconds` offset alarm |
+| `omnifocus_move_tag` | `move_tag` | Move tag under parent or to root |
+| `omnifocus_move_folder` | `move_folder` | Move folder under parent or to root |
+| `omnifocus_convert_task_to_project` | `convert_to_project` | OmniAuto: `convertTasksToProjects()`, JXA: manual copy+delete |
+| `omnifocus_duplicate_project` | `duplicate_project` | OmniAuto: `duplicateSections()`, JXA: manual copy |
+| `omnifocus_get_forecast_tag` | `get_forecast_tag` | OmniAuto: `Tag.forecastTag`, JXA: null |
+| `omnifocus_clean_up` | `clean_up` | OmniAuto: `document.cleanUp()`, JXA: `doc.compact()` |
+| `omnifocus_get_settings` | `get_settings` | OmniAuto: `Settings.objectForKey()`, JXA: limited |
+
+### Added in complete API coverage (22 tools)
+| Tool | Action | Notes |
+|---|---|---|
+| `omnifocus_list_linked_files` | `list_linked_files` | Returns `linkedFileURLs` array for a task |
+| `omnifocus_add_linked_file` | `add_linked_file` | Params: `id`, `url` |
+| `omnifocus_remove_linked_file` | `remove_linked_file` | Params: `id`, `url` |
+| `omnifocus_search_projects` | `search_projects` | OmniAuto: `database.projectsMatching()`, JXA: manual |
+| `omnifocus_search_folders` | `search_folders` | OmniAuto: `database.foldersMatching()`, JXA: manual |
+| `omnifocus_search_tasks_native` | `search_tasks_native` | OmniAuto: `database.tasksMatching()`, JXA: fallback |
+| `omnifocus_lookup_url` | `lookup_url` | OmniAuto: `database.objectForURL()`, JXA: limited |
+| `omnifocus_get_forecast_days` | `get_forecast_days` | OmniAuto: ForecastDay API, JXA: getForecast fallback |
+| `omnifocus_get_focus` | `get_focus` | Returns focused projects/folders |
+| `omnifocus_set_focus` | `set_focus` | Params: `ids` (empty to unfocus) |
+| `omnifocus_undo` | `undo` | OmniAuto: `document.undo()`, JXA: limited |
+| `omnifocus_redo` | `redo` | OmniAuto: `document.redo()`, JXA: limited |
+| `omnifocus_save` | `save` | `document.save()` |
+| `omnifocus_duplicate_tasks_batch` | `duplicate_tasks_batch` | Params: `ids` array |
+| `omnifocus_duplicate_tags` | `duplicate_tags` | OmniAuto: `duplicateTags()`, JXA: manual copy |
+| `omnifocus_move_projects_batch` | `move_projects_batch` | OmniAuto: `moveSections()`, JXA: manual |
+| `omnifocus_reorder_task_tags` | `reorder_task_tags` | Removes all, re-adds in order |
+| `omnifocus_copy_tasks` | `copy_tasks` | OmniAuto: `copyTasksToPasteboard()`, JXA: limited |
+| `omnifocus_paste_tasks` | `paste_tasks` | OmniAuto: `pasteTasksFromPasteboard()`, JXA: limited |
+| `omnifocus_next_repetition_date` | `next_repetition_date` | `repetitionRule.firstDateAfterDate()` |
+| `omnifocus_set_forecast_tag` | `set_forecast_tag` | OmniAuto: set `Tag.forecastTag`, JXA: limited |
+| `omnifocus_set_notification_repeat` | `set_notification_repeat` | Set alarm `repeatInterval` |
+
+### Enriched serialization fields (Pro 4.8.8)
+
+**taskToJSON** new fields: `plannedDate`, `effectivePlannedDate`, `effectiveDueDate`, `effectiveDeferDate`, `effectiveFlagged`, `added`, `modified`, `taskStatus`, `sequential`, `completedByChildren`, `hasChildren`, `url` (OmniAuto only), `dropDate`, `effectiveCompletedDate`, `effectiveDropDate`, `shouldUseFloatingTimeZone`, `assignedContainer`
+
+**projectToJSON** new fields: `sequential`, `containsSingletonActions`, `estimatedMinutes`, `lastReviewDate`, `nextReviewDate`, `reviewInterval`, `parentFolder`, `parentFolderId`, `added`, `modified`, `numberOfTasks`, `numberOfAvailableTasks`, `effectiveDueDate`, `effectiveDeferDate`, `effectiveFlagged`, `url` (OmniAuto only), `nextTask`, `defaultSingletonActionHolder`, `shouldUseFloatingTimeZone`, `dropDate`, `effectiveCompletedDate`, `effectiveDropDate`
+
+**tagToJSON** new fields: `status`, `allowsNextAction`, `childrenAreMutuallyExclusive`, `availableTaskCount`
+
+**folderToJSON** new fields: `status`, `parentId`, `parentName`, `projectCount`, `folderCount`
+
+**perspectiveToJSON** new fields: `archivedFilterRules`, `iconColor`
+
+**Notification/alarm serialization** new fields: `repeatInterval`, `isSnoozed`, `usesFloatingTimeZone`, `relativeFireOffset`
+
+### Enriched writable parameters (Pro 4.8.8)
+
+- `create_task` / `update_task` / `create_subtask`: `planned`, `sequential`, `completedByChildren`, `shouldUseFloatingTimeZone`
+- `create_project` / `update_project`: `estimatedMinutes`, `sequential`, `containsSingletonActions`, `reviewInterval`, `shouldUseFloatingTimeZone`
+- `update_tag`: `allowsNextAction`
+- `set_task_repetition`: `anchorDateKey` (due/defer/planned), `catchUpAutomatically`
 
 ## Notes
 
@@ -99,3 +161,5 @@ Both JS scripts must stay in sync whenever a new action is added.
 - Repetition uses `Task.RepetitionRule` / `Task.RepetitionMethod` in Omni Automation (with string fallback).
 - Project status in OmniAutomation uses `Project.Status.Active/OnHold/Dropped` enum (with string fallback).
 - `stalled` projects = active projects with zero available next actions.
+- Planned dates, effective dates, and `url` require OmniFocus 4.7+; gracefully return `null` on older versions via `safeCall`/`firstValue`.
+- `sequential` in JXA projectToJSON uses inverse of `parallel` property; OmniAutomation uses `sequential` directly.
