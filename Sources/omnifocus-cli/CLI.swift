@@ -108,6 +108,9 @@ struct OmniFocusCLI {
             exit(1)
         }
 
+        // Restrict socket to owner only (0600)
+        chmod(socketPath, 0o600)
+
         guard listen(fd, 8) == 0 else {
             fputs("Error: failed to listen on socket\n", stderr)
             close(fd)
@@ -229,6 +232,11 @@ struct OmniFocusCLI {
         _ = payload.withCString { send(fd, $0, strlen($0), 0) }
     }
 
+    static func setRecvTimeout(_ fd: Int32, seconds: Int) {
+        var tv = timeval(tv_sec: seconds, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+    }
+
     // MARK: - Socket client
 
     static func sendToDaemon(toolName: String, arguments: [String: Any]) -> String? {
@@ -252,6 +260,8 @@ struct OmniFocusCLI {
             }
         }
         guard connectResult == 0 else { return nil }
+
+        setRecvTimeout(fd, seconds: 60)
 
         // Send request
         var request: [String: Any] = ["command": toolName]
@@ -307,6 +317,8 @@ struct OmniFocusCLI {
             }
         }
         guard connectResult == 0 else { return nil }
+
+        setRecvTimeout(fd, seconds: 5)
 
         let request: [String: Any] = ["command": command]
         guard let data = try? JSONSerialization.data(withJSONObject: request, options: []),
@@ -494,7 +506,7 @@ struct OmniFocusCLI {
                 }
                 let jsonStr = args[i + 1]
                 guard let data = jsonStr.data(using: .utf8),
-                      let obj = try? JSONSerialization.jsonObject(with: data, options: []) else {
+                      let obj = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] else {
                     throw CLIError.invalidValue(arg, jsonStr, "JSON object")
                 }
                 result[camelKey.isEmpty ? key : camelKey] = obj

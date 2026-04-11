@@ -17,7 +17,8 @@ public final class OFEngine: @unchecked Sendable {
     }()
 
     public let tools = allTools
-    var automationBackendProbe: (available: Bool, time: Date)?
+    private let probeLock = NSLock()
+    private var automationBackendProbe: (available: Bool, time: Date)?
 
     static let toolNameToAction: [String: String] = [
         "omnifocus_convert_task_to_project": "convert_to_project"
@@ -249,17 +250,26 @@ public final class OFEngine: @unchecked Sendable {
     }
 
     func isAutomationBackendAvailable() -> Bool {
+        probeLock.lock()
         if let probe = automationBackendProbe, Date().timeIntervalSince(probe.time) < 300 {
-            return probe.available
+            let result = probe.available
+            probeLock.unlock()
+            return result
         }
+        probeLock.unlock()
+
         let probeScript = "JSON.stringify({hasDatabase: (typeof database !== 'undefined') || (typeof document !== 'undefined' && document && typeof document.database !== 'undefined') || (typeof flattenedProjects !== 'undefined') || (typeof moveSections !== 'undefined')})"
         if let result = try? runOmniAutomationScript(probeScript, parseJson: true),
            let dict = result as? [String: Any],
            let hasDatabase = dict["hasDatabase"] as? Bool {
+            probeLock.lock()
             automationBackendProbe = (hasDatabase, Date())
+            probeLock.unlock()
             return hasDatabase
         }
+        probeLock.lock()
         automationBackendProbe = (false, Date())
+        probeLock.unlock()
         return false
     }
 }
