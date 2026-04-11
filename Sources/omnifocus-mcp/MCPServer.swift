@@ -112,16 +112,7 @@ final class MCPServer {
             }
             let arguments = params["arguments"] as? [String: Any] ?? [String: Any]()
             let resultValue = try engine.callTool(named: toolName, arguments: arguments)
-            let jsonText: String
-            if let str = resultValue as? String {
-                jsonText = str
-            } else if JSONSerialization.isValidJSONObject(resultValue),
-                      let jsonData = try? JSONSerialization.data(withJSONObject: resultValue, options: [.sortedKeys]),
-                      let encoded = String(data: jsonData, encoding: .utf8) {
-                jsonText = encoded
-            } else {
-                jsonText = "{}"
-            }
+            let jsonText = try OFEngine.serializeToolResult(resultValue)
             let response: [String: Any] = [
                 "content": [["type": "text", "text": jsonText]]
             ]

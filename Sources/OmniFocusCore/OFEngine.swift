@@ -26,6 +26,20 @@ public final class OFEngine: @unchecked Sendable {
 
     public init() {}
 
+    /// Serialize a tool result to a JSON string.
+    /// Throws if the result cannot be represented as JSON.
+    public static func serializeToolResult(_ result: Any) throws -> String {
+        if let str = result as? String {
+            return str
+        }
+        if JSONSerialization.isValidJSONObject(result),
+           let data = try? JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]),
+           let encoded = String(data: data, encoding: .utf8) {
+            return encoded
+        }
+        throw MCPError.toolError("Tool returned non-serializable result of type \(type(of: result))")
+    }
+
     public func callTool(named name: String, arguments: [String: Any]) throws -> Any {
         if name == "omnifocus_eval_automation" {
             guard let script = arguments["script"] as? String else {

@@ -192,25 +192,8 @@ struct OmniFocusCLI {
 
         do {
             let result = try engine.callTool(named: command, arguments: arguments)
-            if let dict = result as? [String: Any] {
-                writeResponse(fd, result: dict)
-            } else if let arr = result as? [Any] {
-                writeResponse(fd, result: ["data": arr])
-            } else if let str = result as? String {
-                // Try to parse as JSON for structured response
-                if let data = str.data(using: .utf8),
-                   let json = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) {
-                    if JSONSerialization.isValidJSONObject(json) {
-                        writeResponse(fd, result: json)
-                    } else {
-                        writeResponse(fd, result: ["data": json])
-                    }
-                } else {
-                    writeResponse(fd, result: ["data": str])
-                }
-            } else {
-                writeResponse(fd, result: ["data": "\(result)"])
-            }
+            let jsonText = try OFEngine.serializeToolResult(result)
+            writeResponse(fd, result: ["data": jsonText])
         } catch {
             writeResponse(fd, error: "\(error)")
         }
