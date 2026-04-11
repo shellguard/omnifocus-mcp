@@ -18,7 +18,7 @@ The implementation uses Omni Automation where available, with JXA fallback.
 
 ## Install
 
-Build and install `omnifocus-mcp` to `/usr/local/bin`:
+Build and install both binaries (`omnifocus-mcp` + `omnifocus-cli`) to `/usr/local/bin`:
 
 ```bash
 ./scripts/install.sh

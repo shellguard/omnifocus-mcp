@@ -1,9 +1,9 @@
 #!/bin/sh
-# install.sh — build and install omnifocus-mcp
+# install.sh — build and install omnifocus-mcp and omnifocus-cli
 # Usage: ./scripts/install.sh [--prefix /usr/local]
 set -eu
 
-BINARY="omnifocus-mcp"
+BINARIES="omnifocus-mcp omnifocus-cli"
 PREFIX="${INSTALL_PREFIX:-/usr/local}"
 
 # Parse --prefix flag
@@ -47,15 +47,17 @@ check_omnifocus
 
 # ── Build ────────────────────────────────────────────────────────────────────
 
-echo "==> Building $BINARY (release)"
+echo "==> Building (release)"
 cd "$ROOT_DIR"
 swift build -c release
 
-BIN_PATH="$ROOT_DIR/.build/release/$BINARY"
-if [ ! -x "$BIN_PATH" ]; then
-  echo "Error: build succeeded but binary not found at $BIN_PATH" >&2
-  exit 1
-fi
+for bin in $BINARIES; do
+  BIN_PATH="$ROOT_DIR/.build/release/$bin"
+  if [ ! -x "$BIN_PATH" ]; then
+    echo "Error: build succeeded but binary not found at $BIN_PATH" >&2
+    exit 1
+  fi
+done
 
 # ── Install ──────────────────────────────────────────────────────────────────
 
@@ -64,20 +66,28 @@ if [ ! -d "$BIN_DIR" ]; then
   mkdir -p "$BIN_DIR"
 fi
 
-# Use sudo only if we can't write to the target directory
-if [ -w "$BIN_DIR" ]; then
-  cp "$BIN_PATH" "$BIN_DIR/$BINARY"
-  chmod 755 "$BIN_DIR/$BINARY"
-else
+NEEDS_SUDO=false
+if [ ! -w "$BIN_DIR" ]; then
+  NEEDS_SUDO=true
   echo "  (requires sudo to write to $BIN_DIR)"
-  sudo cp "$BIN_PATH" "$BIN_DIR/$BINARY"
-  sudo chmod 755 "$BIN_DIR/$BINARY"
 fi
 
-INSTALLED="$BIN_DIR/$BINARY"
-echo "==> Installed: $INSTALLED"
+for bin in $BINARIES; do
+  BIN_PATH="$ROOT_DIR/.build/release/$bin"
+  if [ "$NEEDS_SUDO" = true ]; then
+    sudo cp "$BIN_PATH" "$BIN_DIR/$bin"
+    sudo chmod 755 "$BIN_DIR/$bin"
+  else
+    cp "$BIN_PATH" "$BIN_DIR/$bin"
+    chmod 755 "$BIN_DIR/$bin"
+  fi
+  echo "  Installed: $BIN_DIR/$bin"
+done
 
 # ── Post-install hints ───────────────────────────────────────────────────────
+
+MCP_BIN="$BIN_DIR/omnifocus-mcp"
+CLI_BIN="$BIN_DIR/omnifocus-cli"
 
 cat <<EOF
 
@@ -88,31 +98,31 @@ Done! Next steps:
      Allow Terminal (or your MCP client) to control OmniFocus.
 
 2. In OmniFocus, enable:
-     Settings > Automation > Allow JavaScript from Apple Events
+     Automation > Accept scripts from external applications
 
-3. Add to your MCP client config:
+3. MCP server config (Claude Desktop / Claude Code):
 
-   Claude Desktop (~/.claude/claude_desktop_config.json):
      {
        "mcpServers": {
          "omnifocus": {
-           "command": "$INSTALLED",
+           "command": "$MCP_BIN",
            "args": []
          }
        }
      }
 
-   Claude Code (~/.claude/settings.json):
-     {
-       "mcpServers": {
-         "omnifocus": {
-           "command": "$INSTALLED",
-           "args": []
-         }
-       }
-     }
+4. CLI usage:
 
-   Environment overrides (optional):
+     $CLI_BIN --help
+     $CLI_BIN list-tasks --flagged
+     $CLI_BIN create-task --name "Buy milk"
+
+5. Optional: start CLI daemon (faster repeated calls):
+
+     $CLI_BIN --daemon        # start
+     $CLI_BIN --install       # auto-start at login via launchd
+
+   Environment overrides:
      OF_BACKEND=automation   # or: jxa
      OF_APP_PATH=/Applications/OmniFocus.app
 
