@@ -101,18 +101,26 @@ public final class OFEngine: @unchecked Sendable {
         process.standardError = stderrPipe
 
         try process.run()
-        var timedOut = false
+        nonisolated(unsafe) var timedOut = false
         let timeoutItem = DispatchWorkItem { timedOut = true; process.terminate() }
         DispatchQueue.global().asyncAfter(deadline: .now() + 30, execute: timeoutItem)
+
+        // Drain pipes concurrently to avoid deadlock when output exceeds pipe buffer (~64KB)
+        let group = DispatchGroup()
+        nonisolated(unsafe) var outputData = Data()
+        nonisolated(unsafe) var errorData = Data()
+        group.enter()
+        DispatchQueue.global().async { outputData = stdoutPipe.fileHandleForReading.readDataToEndOfFile(); group.leave() }
+        group.enter()
+        DispatchQueue.global().async { errorData = stderrPipe.fileHandleForReading.readDataToEndOfFile(); group.leave() }
         process.waitUntilExit()
+        group.wait()
         timeoutItem.cancel()
 
         if timedOut {
             throw MCPError.scriptError("OmniFocus script timed out after 30 seconds")
         }
 
-        let outputData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-        let errorData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
         let errorText = String(data: errorData, encoding: .utf8) ?? ""
         let outputText = String(data: outputData, encoding: .utf8) ?? ""
         let trimmedOutput = outputText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -174,18 +182,26 @@ public final class OFEngine: @unchecked Sendable {
         process.standardError = stderrPipe
 
         try process.run()
-        var timedOut = false
+        nonisolated(unsafe) var timedOut = false
         let timeoutItem = DispatchWorkItem { timedOut = true; process.terminate() }
         DispatchQueue.global().asyncAfter(deadline: .now() + 30, execute: timeoutItem)
+
+        // Drain pipes concurrently to avoid deadlock when output exceeds pipe buffer (~64KB)
+        let group = DispatchGroup()
+        nonisolated(unsafe) var outputData = Data()
+        nonisolated(unsafe) var errorData = Data()
+        group.enter()
+        DispatchQueue.global().async { outputData = stdoutPipe.fileHandleForReading.readDataToEndOfFile(); group.leave() }
+        group.enter()
+        DispatchQueue.global().async { errorData = stderrPipe.fileHandleForReading.readDataToEndOfFile(); group.leave() }
         process.waitUntilExit()
+        group.wait()
         timeoutItem.cancel()
 
         if timedOut {
             throw MCPError.scriptError("OmniFocus script timed out after 30 seconds")
         }
 
-        let outputData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-        let errorData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
         let errorText = String(data: errorData, encoding: .utf8) ?? ""
 
         guard process.terminationStatus == 0 else {

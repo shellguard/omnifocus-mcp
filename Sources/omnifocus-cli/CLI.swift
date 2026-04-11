@@ -7,6 +7,14 @@ let launchdLabel = "com.omnifocus-cli.daemon"
 let launchdPlistPath = (NSString(string: "~/Library/LaunchAgents/\(launchdLabel).plist").expandingTildeInPath)
 let launchdLogPath = "/tmp/omnifocus-cli-daemon.log"
 nonisolated(unsafe) var daemonStartTime = Date()
+nonisolated(unsafe) var signalSocketPath: UnsafeMutablePointer<CChar>?
+nonisolated(unsafe) var signalPidPath: UnsafeMutablePointer<CChar>?
+
+private let signalShutdownHandler: @convention(c) (Int32) -> Void = { _ in
+    if let p = signalSocketPath { unlink(p) }
+    if let p = signalPidPath { unlink(p) }
+    _exit(0)
+}
 
 @main
 struct OmniFocusCLI {
@@ -121,14 +129,11 @@ struct OmniFocusCLI {
         let engine = OFEngine()
         fputs("omnifocus-cli daemon started (pid \(ProcessInfo.processInfo.processIdentifier), socket \(socketPath))\n", stderr)
 
-        // Clean shutdown on signals
-        let shutdownHandler: @convention(c) (Int32) -> Void = { _ in
-            unlink(socketPath)
-            unlink(pidPath)
-            exit(0)
-        }
-        signal(SIGTERM, shutdownHandler)
-        signal(SIGINT, shutdownHandler)
+        // Store C strings for async-signal-safe cleanup
+        signalSocketPath = strdup(socketPath)
+        signalPidPath = strdup(pidPath)
+        signal(SIGTERM, signalShutdownHandler)
+        signal(SIGINT, signalShutdownHandler)
 
         while true {
             var clientAddr = sockaddr_un()
@@ -202,7 +207,7 @@ struct OmniFocusCLI {
         guard let data = try? JSONSerialization.data(withJSONObject: envelope, options: []),
               var payload = String(data: data, encoding: .utf8) else { return }
         payload += "\n"
-        _ = payload.withCString { send(fd, $0, strlen($0), 0) }
+        _ = payload.withCString { send(fd, $0, payload.utf8.count, 0) }
     }
 
     static func writeResponse(_ fd: Int32, error: String) {
@@ -210,7 +215,7 @@ struct OmniFocusCLI {
         guard let data = try? JSONSerialization.data(withJSONObject: envelope, options: []),
               var payload = String(data: data, encoding: .utf8) else { return }
         payload += "\n"
-        _ = payload.withCString { send(fd, $0, strlen($0), 0) }
+        _ = payload.withCString { send(fd, $0, payload.utf8.count, 0) }
     }
 
     static func setRecvTimeout(_ fd: Int32, seconds: Int) {
@@ -296,7 +301,7 @@ struct OmniFocusCLI {
         guard let data = try? JSONSerialization.data(withJSONObject: request, options: []),
               var payload = String(data: data, encoding: .utf8) else { return nil }
         payload += "\n"
-        let sent = payload.withCString { send(fd, $0, strlen($0), 0) }
+        let sent = payload.withCString { send(fd, $0, payload.utf8.count, 0) }
         guard sent > 0 else { return nil }
 
         // Read response
@@ -345,13 +350,14 @@ struct OmniFocusCLI {
         guard let data = try? JSONSerialization.data(withJSONObject: request, options: []),
               var payload = String(data: data, encoding: .utf8) else { return nil }
         payload += "\n"
-        _ = payload.withCString { send(fd, $0, strlen($0), 0) }
+        _ = payload.withCString { send(fd, $0, payload.utf8.count, 0) }
 
         var buffer = Data()
         var byte: UInt8 = 0
         while recv(fd, &byte, 1, 0) == 1 {
             if byte == 0x0A { break }
             buffer.append(byte)
+            if buffer.count > 1_048_576 { return nil } // 1MB limit
         }
 
         guard !buffer.isEmpty else { return nil }
@@ -403,6 +409,13 @@ struct OmniFocusCLI {
             resolvedPath = FileManager.default.currentDirectoryPath + "/" + binaryPath
         }
 
+        let escapedPath = resolvedPath
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&apos;")
+
         let plist = """
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -412,7 +425,7 @@ struct OmniFocusCLI {
             <string>\(launchdLabel)</string>
             <key>ProgramArguments</key>
             <array>
-                <string>\(resolvedPath)</string>
+                <string>\(escapedPath)</string>
                 <string>--daemon</string>
             </array>
             <key>RunAtLoad</key>
