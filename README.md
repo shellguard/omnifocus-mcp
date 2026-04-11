@@ -18,7 +18,18 @@ The implementation uses Omni Automation where available, with JXA fallback.
 
 ## Install
 
-Build and install both binaries (`omnifocus-mcp` + `omnifocus-cli`) to `/usr/local/bin`:
+### Homebrew (recommended)
+
+```bash
+brew tap shellguard/omnifocus
+brew install omnifocus-mcp
+```
+
+Installs pre-built universal binaries (`omnifocus-mcp` + `omnifocus-cli`). No Swift toolchain required.
+
+### From source
+
+Requires Swift 6.2+:
 
 ```bash
 ./scripts/install.sh
