@@ -50,6 +50,7 @@ Protocol compatibility:
 - `initialize` negotiates protocol version (uses requested version when supported, otherwise falls back to latest supported)
 - Accepts both lifecycle notifications: `initialized` (legacy) and `notifications/initialized` (current)
 - `tools/call` execution failures are returned as MCP tool results with `isError: true` (invalid method/tool lookup still use JSON-RPC errors)
+- `tools/list` supports cursor pagination (`params.cursor` / `result.nextCursor`)
 
 Example MCP config:
 

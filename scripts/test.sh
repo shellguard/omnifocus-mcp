@@ -44,6 +44,10 @@ rpc() {
   printf '%s\n' "$1" | OF_BACKEND=jxa "$BINARY" 2>/dev/null
 }
 
+rpc_paged() {
+  printf '%s\n' "$1" | OF_BACKEND=jxa OF_MCP_TOOLS_PAGE_SIZE=25 "$BINARY" 2>/dev/null
+}
+
 # Assert output contains an exact substring
 assert_contains() {
   local label="$1" output="$2" needle="$3"
@@ -204,6 +208,40 @@ if [ "$DE_COUNT" -eq 8 ]; then
 else
   fail "destructive annotation count" "expected 8, got $DE_COUNT"
 fi
+
+# ─── 3b. tools/list pagination ────────────────────────────────────────────────
+header "3b. tools/list pagination"
+
+PAGED_LIST_1=$(rpc_paged '{"jsonrpc":"2.0","id":201,"method":"tools/list","params":{}}')
+assert_contains "paged tools/list includes nextCursor" "$PAGED_LIST_1" '"nextCursor":"25"'
+PAGE1_COUNT=$(printf '%s' "$PAGED_LIST_1" | grep -oF '"name":"omnifocus_' | wc -l | tr -d ' ')
+if [ "$PAGE1_COUNT" -eq 25 ]; then
+  pass "first page returns 25 tools (got $PAGE1_COUNT)"
+else
+  fail "first page size" "expected 25, got $PAGE1_COUNT"
+fi
+
+PAGED_LIST_2=$(rpc_paged '{"jsonrpc":"2.0","id":202,"method":"tools/list","params":{"cursor":"25"}}')
+assert_contains "second page includes nextCursor" "$PAGED_LIST_2" '"nextCursor":"50"'
+PAGE2_COUNT=$(printf '%s' "$PAGED_LIST_2" | grep -oF '"name":"omnifocus_' | wc -l | tr -d ' ')
+if [ "$PAGE2_COUNT" -eq 25 ]; then
+  pass "second page returns 25 tools (got $PAGE2_COUNT)"
+else
+  fail "second page size" "expected 25, got $PAGE2_COUNT"
+fi
+
+PAGED_LIST_LAST=$(rpc_paged '{"jsonrpc":"2.0","id":203,"method":"tools/list","params":{"cursor":"75"}}')
+assert_not_contains "last page omits nextCursor" "$PAGED_LIST_LAST" '"nextCursor"'
+LAST_COUNT=$(printf '%s' "$PAGED_LIST_LAST" | grep -oF '"name":"omnifocus_' | wc -l | tr -d ' ')
+if [ "$LAST_COUNT" -eq 9 ]; then
+  pass "last page returns remaining 9 tools (got $LAST_COUNT)"
+else
+  fail "last page size" "expected 9, got $LAST_COUNT"
+fi
+
+BAD_CURSOR_OUT=$(rpc_paged '{"jsonrpc":"2.0","id":204,"method":"tools/list","params":{"cursor":"bad"}}')
+assert_contains "invalid cursor returns error" "$BAD_CURSOR_OUT" '"error":'
+assert_contains "invalid cursor uses code -32602" "$BAD_CURSOR_OUT" '-32602'
 
 # ─── 4. tools/call error handling ─────────────────────────────────────────────
 header "4. tools/call error handling"

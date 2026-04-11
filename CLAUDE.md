@@ -60,6 +60,7 @@ This means there is no additional Swift-side action switch to update, but every 
 - `initialize` negotiates the protocol version: use requested version when supported, otherwise fall back to latest supported.
 - Accept both lifecycle notification names: `initialized` and `notifications/initialized`.
 - In `tools/call`, tool execution failures are returned in-result with `isError: true`; keep JSON-RPC errors for protocol-level failures (unknown method/tool, malformed request).
+- `tools/list` supports cursor pagination with `params.cursor` and `result.nextCursor`.
 
 ### launchd Integration (CLI)
 

@@ -17,6 +17,7 @@ final class MCPServer {
     let maxBufferSize = 10 * 1024 * 1024 // 10 MB
     let serverVersion = "0.2.0"
     let supportedProtocolVersions = ["2025-11-25", "2025-06-18", "2024-11-05"]
+    let defaultToolsPageSize = 100
 
     func run() {
         var buffer = Data()
@@ -98,18 +99,9 @@ final class MCPServer {
             ]
             sendResult(id: id, result: result)
         case "tools/list":
-            let toolEntries = engine.tools.map { tool -> [String: Any] in
-                var entry: [String: Any] = [
-                    "name": tool.name,
-                    "description": tool.description,
-                    "inputSchema": tool.inputSchema
-                ]
-                if let annotations = tool.annotations {
-                    entry["annotations"] = annotations
-                }
-                return entry
-            }
-            sendResult(id: id, result: ["tools": toolEntries])
+            let params = message["params"] as? [String: Any]
+            let result = try buildToolsListResult(params: params)
+            sendResult(id: id, result: result)
         case "tools/call":
             guard let params = message["params"] as? [String: Any],
                   let toolName = params["name"] as? String else {
@@ -163,6 +155,54 @@ final class MCPServer {
             "isError": true
         ]
         sendResult(id: id, result: response)
+    }
+
+    func buildToolsListResult(params: [String: Any]?) throws -> [String: Any] {
+        let pageSize = resolvedToolsPageSize()
+        let cursor = params?["cursor"]
+        let start: Int
+        if let cursorString = cursor as? String {
+            guard let parsed = Int(cursorString), parsed >= 0 else {
+                throw MCPError.invalidParams("Invalid cursor for tools/list")
+            }
+            start = parsed
+        } else if cursor == nil || cursor is NSNull {
+            start = 0
+        } else {
+            throw MCPError.invalidParams("Invalid cursor for tools/list")
+        }
+
+        guard start <= engine.tools.count else {
+            throw MCPError.invalidParams("Cursor out of range for tools/list")
+        }
+
+        let end = min(start + pageSize, engine.tools.count)
+        let page = Array(engine.tools[start..<end])
+        let toolEntries = page.map { tool -> [String: Any] in
+            var entry: [String: Any] = [
+                "name": tool.name,
+                "description": tool.description,
+                "inputSchema": tool.inputSchema
+            ]
+            if let annotations = tool.annotations {
+                entry["annotations"] = annotations
+            }
+            return entry
+        }
+
+        var result: [String: Any] = ["tools": toolEntries]
+        if end < engine.tools.count {
+            result["nextCursor"] = String(end)
+        }
+        return result
+    }
+
+    func resolvedToolsPageSize() -> Int {
+        let env = ProcessInfo.processInfo.environment["OF_MCP_TOOLS_PAGE_SIZE"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let env, let pageSize = Int(env), pageSize > 0 {
+            return pageSize
+        }
+        return defaultToolsPageSize
     }
 
     func sendResult(id: Any?, result: [String: Any]) {
