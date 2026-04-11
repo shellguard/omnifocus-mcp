@@ -2,16 +2,24 @@
 
 ## Project Overview
 
-A multi-file Swift MCP server that exposes OmniFocus as MCP tools. **No external dependencies** — stdlib only.
+Swift package with a shared core library and two executables:
+
+- `OmniFocusCore` (tool metadata + execution engine + embedded JS resources)
+- `omnifocus-mcp` (MCP stdio server)
+- `omnifocus-cli` (CLI with optional local daemon mode)
+
+No external Swift dependencies (stdlib/Foundation only).
 
 ## Build & Test
 
 ```bash
-swift build -c release          # build
-.build/release/omnifocus-mcp   # run (expects MCP JSON-RPC on stdin)
+swift build -c release
+.build/release/omnifocus-mcp   # MCP server (JSON-RPC on stdin/stdout)
+.build/release/omnifocus-cli   # CLI
+./scripts/test.sh --no-build   # integration/protocol checks
 ```
 
-Binary lands at `.build/release/omnifocus-mcp`. Swift 6.2+ required.
+Swift 6.2+ required.
 
 ## Architecture
 
@@ -19,13 +27,15 @@ Binary lands at `.build/release/omnifocus-mcp`. Swift 6.2+ required.
 
 | File | Purpose | Lines |
 |---|---|---|
-| `ToolDefinition.swift` | `ToolDefinition` struct, annotation constants | ~18 |
-| `MCPError.swift` | Error types for MCP protocol errors | ~27 |
-| `JSShared.swift` | 14 shared JS utility functions (injected into both backends) | ~170 |
-| `JXAScript.swift` | JXA backend JS — composed from shared + JXA-specific code | ~2200 |
-| `OmniAutomationScript.swift` | OmniAutomation backend JS — preferred backend | ~2750 |
-| `Tools.swift` | `allTools` array — 84 `ToolDefinition` structs with annotations | ~1040 |
-| `MCPServer.swift` | MCP JSON-RPC server: protocol handling, dispatch, script execution | ~430 |
+| `Sources/OmniFocusCore/OFEngine.swift` | Tool dispatch, backend selection, script execution | ~260 |
+| `Sources/OmniFocusCore/Tools.swift` | `allTools` array — 84 `ToolDefinition` structs with annotations | ~1040 |
+| `Sources/OmniFocusCore/ToolDefinition.swift` | `ToolDefinition` struct + annotation constants | ~18 |
+| `Sources/OmniFocusCore/MCPError.swift` | Shared MCP/tool error definitions | ~27 |
+| `Sources/OmniFocusCore/Resources/shared.js` | Shared JS utility functions used by both backends | ~170 |
+| `Sources/OmniFocusCore/Resources/jxa.js` | JXA backend script + action switch | ~2200 |
+| `Sources/OmniFocusCore/Resources/omni_automation.js` | Omni Automation backend script + action switch | ~2750 |
+| `Sources/omnifocus-mcp/MCPServer.swift` | MCP JSON-RPC transport and protocol handlers | ~160 |
+| `Sources/omnifocus-cli/CLI.swift` | CLI command mapping, flag parsing, daemon mode | ~700 |
 
 ### JS Backend Composition
 
@@ -40,7 +50,9 @@ Both JS scripts must stay in sync whenever a new action is added.
 
 ### Tool Dispatch
 
-`callTool()` dynamically derives the action name from the tool name by stripping the `omnifocus_` prefix. No manual switch case needed — adding a tool to `allTools` in `Tools.swift` is sufficient. Exception: `omnifocus_eval_automation` has inline safety logic (deny-list).
+`callTool()` dynamically derives the action name from the tool name by stripping the `omnifocus_` prefix (except explicit aliases like `omnifocus_convert_task_to_project` and special handling for `omnifocus_eval_automation`).
+
+This means there is no additional Swift-side action switch to update, but every new tool still needs matching JS implementation + JS `switch (action)` entries in both backends.
 
 ## Adding a New Tool — Checklist
 

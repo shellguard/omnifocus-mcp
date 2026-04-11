@@ -1,17 +1,24 @@
-# OmniFocus MCP Server (macOS)
+# OmniFocus MCP + CLI (macOS)
 
-A Swift-based MCP server for OmniFocus 4 using Omni Automation (evaluate javascript) via AppleScript. macOS only.
+Swift-based OmniFocus integration for macOS with two executables:
+
+- `omnifocus-mcp`: MCP server over stdio (JSON-RPC)
+- `omnifocus-cli`: human-friendly CLI with optional local daemon mode
+
+The implementation uses Omni Automation where available, with JXA fallback.
 
 ## Requirements
 
 - macOS with OmniFocus 4 installed
-- Swift 6.2 toolchain
-- Automation permission to control OmniFocus (System Settings > Privacy & Security > Automation)
-- OmniFocus setting: Automation > Accept scripts from external applications
+- Swift 6.2+ toolchain
+- Automation permission to control OmniFocus:
+  System Settings > Privacy & Security > Automation
+- OmniFocus setting enabled:
+  Automation > Accept scripts from external applications
 
 ## Install
 
-Build and install to `/usr/local/bin` in one step:
+Build and install `omnifocus-mcp` to `/usr/local/bin`:
 
 ```bash
 ./scripts/install.sh
@@ -22,26 +29,72 @@ Optional flags / env vars:
 - `--prefix /path` — install under a different prefix (default `/usr/local`)
 - `INSTALL_PREFIX=/path ./scripts/install.sh` — same via env
 
-The script checks for Swift and OmniFocus, builds a release binary, copies it to `<prefix>/bin/omnifocus-mcp` (prompting for `sudo` if needed), and prints MCP client config snippets.
-
 ## Build
 
 ```bash
 swift build -c release
 ```
 
-The binary will be at `./.build/release/omnifocus-mcp`.
+Release binaries:
+
+- `./.build/release/omnifocus-mcp`
+- `./.build/release/omnifocus-cli`
+
+## Run As MCP Server
+
+Configure your MCP client to launch `omnifocus-mcp`.
+
+Example MCP config:
+
+```json
+{
+  "command": "/usr/local/bin/omnifocus-mcp",
+  "args": [],
+  "env": {
+    "OF_APP_PATH": "/Applications/OmniFocus.app",
+    "OF_BACKEND": "automation"
+  }
+}
+```
+
+Environment variables:
+
+- `OF_APP_PATH` — path to OmniFocus app bundle (default `/Applications/OmniFocus.app`)
+- `OF_BACKEND` — force backend: `automation` or `jxa` (default auto-detect)
+
+## Run As CLI
+
+Examples:
+
+```bash
+./.build/release/omnifocus-cli --help
+./.build/release/omnifocus-cli list-tasks --status available --limit 20
+./.build/release/omnifocus-cli create-task --name "Call Alex" --project "Work"
+```
+
+Daemon mode (faster repeated calls):
+
+```bash
+./.build/release/omnifocus-cli --daemon
+./.build/release/omnifocus-cli --status
+./.build/release/omnifocus-cli --stop
+```
 
 ## Test
 
-Run integration tests against the built binary (no OmniFocus required):
+Protocol and integration tests (no OmniFocus required):
 
 ```bash
 ./scripts/test.sh            # build then test
-./scripts/test.sh --no-build # skip build, use existing binary
+./scripts/test.sh --no-build # skip build
 ```
 
-Tests cover MCP protocol compliance (initialize, tools/list, tools/call error handling), JSON-RPC error codes, response format, tool catalogue, descriptions, and the `OF_APP_PATH` injection guard. The tools/call content format test is skipped automatically when OmniFocus is not running.
+Live tests (requires OmniFocus running and `jq`):
+
+```bash
+./scripts/test_live.sh
+./scripts/test_live.sh --no-build
+```
 
 ## Package (pkg)
 
@@ -58,158 +111,163 @@ Optional environment overrides:
 - `PKG_INSTALL_LOCATION` (default `/usr/local/bin`)
 - `PKG_SIGN_ID` (set to sign with `pkgbuild`)
 
-The package will be written to `./dist/`.
+Package output: `./dist/`
 
-## Run
+## Tool Catalog
 
-This is an MCP server over stdio. Configure your MCP client to launch it as a command.
+Current MCP catalog: **84 tools**.
 
-Example (generic MCP config):
+Source of truth:
 
-```json
-{
-  "command": "/usr/local/bin/omnifocus-mcp",
-  "args": [],
-  "env": {
-    "OF_APP_PATH": "/Applications/OmniFocus.app",
-    "OF_BACKEND": "automation"
-  }
-}
-```
+- Runtime: `tools/list`
+- Static definitions: `Sources/OmniFocusCore/Tools.swift`
 
-## Tools
+Dates use ISO 8601 strings.
 
-51 tools total. Dates are ISO 8601 strings.
+### Read / list
 
-### Tasks
-
-- `omnifocus_list_tasks` (status, project, tag, search, flagged, limit)
+- `omnifocus_list_tasks`
 - `omnifocus_list_inbox`
-- `omnifocus_list_flagged` (limit)
-- `omnifocus_list_overdue` (limit, includeCompleted)
-- `omnifocus_list_available` (limit, includeCompleted)
-- `omnifocus_search_tasks` (search, status, project, tag, limit)
-- `omnifocus_list_task_children` (id)
-- `omnifocus_get_task_parent` (id)
-- `omnifocus_get_task` (id)
-- `omnifocus_create_task` (name, note, project, tags, due, defer, flagged, estimatedMinutes, inbox, createMissingTags, createMissingProject)
-- `omnifocus_create_subtask` (parentId, name, note, tags, due, defer, flagged, estimatedMinutes, createMissingTags)
-- `omnifocus_duplicate_task` (id, name)
-- `omnifocus_update_task` (id, name, note, project, tags, due, defer, flagged, estimatedMinutes, createMissingTags, createMissingProject)
-- `omnifocus_complete_task` (id, completionDate)
-- `omnifocus_uncomplete_task` (id)
-- `omnifocus_delete_task` (id)
-- `omnifocus_append_to_note` (id, text, type: task|project)
-- `omnifocus_process_inbox` (project, projectId, tags, due, defer, flagged, estimatedMinutes, noteAppend, limit, createMissingTags, createMissingProject, keepInInbox)
-
-### Batch task operations
-
-- `omnifocus_create_tasks_batch` (tasks: [{name, project, note, tags, due, defer, flagged, estimatedMinutes}])
-- `omnifocus_delete_tasks_batch` (ids: [string])
-- `omnifocus_move_tasks_batch` (ids: [string], project)
-
-### Projects
-
 - `omnifocus_list_projects`
-- `omnifocus_get_project` (id)
-- `omnifocus_create_project` (name, note, due, defer, flagged)
-- `omnifocus_update_project` (id, name, note, due, defer, flagged)
-- `omnifocus_complete_project` (id, completionDate)
-- `omnifocus_uncomplete_project` (id)
-- `omnifocus_delete_project` (id)
-- `omnifocus_set_project_status` (id, status: active|on_hold|dropped)
-- `omnifocus_set_project_sequential` (id, sequential)
-- `omnifocus_move_project` (projectId, folder, folderId, createMissingFolder)
-
-### Folders
-
-- `omnifocus_list_folders`
-- `omnifocus_get_folder` (id, name) — includes projects and subfolders
-- `omnifocus_create_folder` (name, note, parent, parentId)
-- `omnifocus_update_folder` (id, name)
-- `omnifocus_delete_folder` (id)
-
-### Tags
-
 - `omnifocus_list_tags`
-- `omnifocus_search_tags` (query)
-- `omnifocus_get_tag` (id)
-- `omnifocus_create_tag` (name, active)
-- `omnifocus_update_tag` (id, name, active)
-- `omnifocus_delete_tag` (id)
-
-### Counts & forecast
-
-- `omnifocus_get_task_counts` — returns `{total, available, completed, overdue, flagged, inbox}`
-- `omnifocus_get_project_counts` — returns `{total, active, on_hold, dropped, stalled}`
-- `omnifocus_get_forecast` — returns `{overdue, today, flagged, dueThisWeek}` task arrays
-
-### Notifications (alarms)
-
-- `omnifocus_list_notifications` (id)
-- `omnifocus_add_notification` (id, date)
-- `omnifocus_remove_notification` (id, notificationId)
-
-### Repetition
-
-- `omnifocus_set_task_repetition` (id, rule, scheduleType: due|defer|fixed) — `rule` is an iCal RRULE string (e.g. `FREQ=WEEKLY;INTERVAL=1`); pass `null` to clear
-
-### Perspectives & utilities
-
 - `omnifocus_list_perspectives`
-- `omnifocus_eval_automation` (script, parseJson) — runs Omni Automation JS via AppleScript
+- `omnifocus_list_folders`
+- `omnifocus_list_flagged`
+- `omnifocus_list_overdue`
+- `omnifocus_list_available`
+- `omnifocus_list_task_children`
+- `omnifocus_get_task_parent`
+- `omnifocus_get_task`
+- `omnifocus_get_project`
+- `omnifocus_get_tag`
+- `omnifocus_get_folder`
+- `omnifocus_get_task_counts`
+- `omnifocus_get_project_counts`
+- `omnifocus_get_forecast`
+- `omnifocus_get_forecast_tag`
+- `omnifocus_get_forecast_days`
+- `omnifocus_get_settings`
+- `omnifocus_get_focus`
 
-## Claude Cowork plugin
+### Search / lookup
 
-The `cowork-plugin/` directory is a ready-made Claude Cowork plugin that connects Claude to OmniFocus with skills, commands, and the MCP connector pre-configured.
+- `omnifocus_search_tasks`
+- `omnifocus_search_tags`
+- `omnifocus_search_projects`
+- `omnifocus_search_folders`
+- `omnifocus_search_tasks_native`
+- `omnifocus_lookup_url`
 
-### What's included
+### Task create / update / lifecycle
 
-**Skills** (Claude auto-invokes based on context):
-- `capture-tasks` — capture anything you mention needing to do into OmniFocus
-- `check-workload` — surfaces overdue, today, flagged, and upcoming tasks
-- `manage-projects` — create, update, review, and reorganise projects
+- `omnifocus_create_task`
+- `omnifocus_create_subtask`
+- `omnifocus_update_task`
+- `omnifocus_duplicate_task`
+- `omnifocus_complete_task`
+- `omnifocus_uncomplete_task`
+- `omnifocus_drop_task`
+- `omnifocus_delete_task`
+- `omnifocus_append_to_note`
+- `omnifocus_set_task_repetition`
+- `omnifocus_next_repetition_date`
+- `omnifocus_process_inbox`
 
-**Commands** (you invoke explicitly):
-- `/omnifocus:capture [text]` — quick-capture to inbox
-- `/omnifocus:forecast` — overdue · today · flagged · this week
-- `/omnifocus:review` — structured review: inbox → overdue → stalled projects
+### Project create / update / lifecycle
 
-### Install
+- `omnifocus_create_project`
+- `omnifocus_update_project`
+- `omnifocus_complete_project`
+- `omnifocus_uncomplete_project`
+- `omnifocus_delete_project`
+- `omnifocus_set_project_status`
+- `omnifocus_set_project_sequential`
+- `omnifocus_move_project`
+- `omnifocus_mark_reviewed`
+- `omnifocus_duplicate_project`
+- `omnifocus_move_projects_batch`
 
-1. Build and install the binary first (see [Package](#package-pkg) above), so it lands at `/usr/local/bin/omnifocus-mcp`.
+### Folders / tags
 
-2. In Claude Desktop, open **Cowork → Customize → Browse plugins** and upload the `cowork-plugin/` folder.
+- `omnifocus_create_folder`
+- `omnifocus_update_folder`
+- `omnifocus_delete_folder`
+- `omnifocus_move_folder`
+- `omnifocus_create_tag`
+- `omnifocus_update_tag`
+- `omnifocus_delete_tag`
+- `omnifocus_move_tag`
+- `omnifocus_duplicate_tags`
 
-   Or, for local testing, launch Claude Code with:
-   ```bash
-   claude --plugin-dir ./cowork-plugin
-   ```
+### Batch operations
 
-3. On first use, macOS will prompt for automation permission to control OmniFocus — allow it.
+- `omnifocus_create_tasks_batch`
+- `omnifocus_delete_tasks_batch`
+- `omnifocus_move_tasks_batch`
+- `omnifocus_duplicate_tasks_batch`
+- `omnifocus_convert_task_to_project`
 
-### Custom binary path
+### Notifications / alarms
 
-If your binary is not at `/usr/local/bin/omnifocus-mcp`, edit `cowork-plugin/.mcp.json` and update the `command` field:
+- `omnifocus_list_notifications`
+- `omnifocus_add_notification`
+- `omnifocus_remove_notification`
+- `omnifocus_add_relative_notification`
+- `omnifocus_set_notification_repeat`
 
-```json
-{
-  "mcpServers": {
-    "omnifocus": {
-      "type": "stdio",
-      "command": "/path/to/omnifocus-mcp",
-      "env": {
-        "OF_APP_PATH": "/Applications/OmniFocus.app"
-      }
-    }
-  }
-}
+### Linked files / pasteboard / focus
+
+- `omnifocus_list_linked_files`
+- `omnifocus_add_linked_file`
+- `omnifocus_remove_linked_file`
+- `omnifocus_copy_tasks`
+- `omnifocus_paste_tasks`
+- `omnifocus_set_focus`
+- `omnifocus_set_forecast_tag`
+- `omnifocus_reorder_task_tags`
+- `omnifocus_import_taskpaper`
+
+### Maintenance / power tools
+
+- `omnifocus_undo`
+- `omnifocus_redo`
+- `omnifocus_save`
+- `omnifocus_clean_up`
+- `omnifocus_eval_automation`
+
+## Claude Cowork Plugin
+
+`cowork-plugin/` is a ready-made Claude Cowork plugin that connects to this MCP server.
+
+Included skills:
+
+- `capture-tasks`
+- `check-workload`
+- `manage-projects`
+
+Included commands:
+
+- `/omnifocus:capture [text]`
+- `/omnifocus:forecast`
+- `/omnifocus:review`
+
+### Install Plugin
+
+1. Build/install `omnifocus-mcp`.
+2. In Claude Desktop: Cowork > Customize > Browse plugins, then upload `cowork-plugin/`.
+3. Approve macOS automation prompt on first use.
+
+For local testing:
+
+```bash
+claude --plugin-dir ./cowork-plugin
 ```
+
+If your binary is not at `/usr/local/bin/omnifocus-mcp`, update `cowork-plugin/.mcp.json`.
 
 ## Notes
 
-- The first run will prompt macOS to allow the server to control OmniFocus.
-- OmniFocus must be able to launch in the current user session.
-- If you see errors launching OmniFocus, set `OF_APP_PATH` to the installed app path (for example `/Applications/OmniFocus.app`) and make sure the app can be opened normally.
-- If Omni Automation is unavailable in your environment, set `OF_BACKEND` to `jxa` to use the AppleScript dictionary via JXA.
-- Omni Automation plug-ins can be stored in iCloud at `~/Library/Mobile Documents/iCloud~com~omnigroup~OmniFocus/Documents/Plug-Ins`. We can add a plug-in bridge if you want a first-party entry point inside OmniFocus.
+- First run prompts macOS automation permission.
+- OmniFocus must launch in the current logged-in user session.
+- If OmniFocus path differs, set `OF_APP_PATH`.
+- If Omni Automation API is unavailable, set `OF_BACKEND=jxa`.
