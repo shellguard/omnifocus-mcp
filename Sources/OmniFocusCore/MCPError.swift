@@ -1,6 +1,6 @@
 import Foundation
 
-enum MCPError: Error, CustomStringConvertible {
+public enum MCPError: Error, CustomStringConvertible {
     case invalidRequest(String)
     case methodNotFound(String)
     case invalidParams(String)
@@ -8,7 +8,7 @@ enum MCPError: Error, CustomStringConvertible {
     case toolError(String)
     case scriptError(String)
 
-    var description: String {
+    public var description: String {
         switch self {
         case .invalidRequest(let message):
             return message

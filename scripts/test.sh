@@ -1,5 +1,5 @@
 #!/bin/bash
-# test.sh — integration tests for the omnifocus-mcp MCP server
+# test.sh — integration tests for omnifocus-mcp and omnifocus-cli
 #
 # Tests protocol compliance and key behaviours without requiring OmniFocus.
 # Each test pipes one or more JSON-RPC messages to the binary and inspects stdout.
@@ -12,6 +12,7 @@ set -euo pipefail
 
 ROOT_DIR=$(cd -- "$(dirname -- "$0")/.." && pwd)
 BINARY="$ROOT_DIR/.build/release/omnifocus-mcp"
+CLI_BINARY="$ROOT_DIR/.build/release/omnifocus-cli"
 NO_BUILD=false
 PASS=0
 FAIL=0
@@ -74,6 +75,11 @@ fi
 
 if [ ! -x "$BINARY" ]; then
   printf "${RED}ERROR${NC}: binary not found at %s\n" "$BINARY" >&2
+  exit 1
+fi
+
+if [ ! -x "$CLI_BINARY" ]; then
+  printf "${RED}ERROR${NC}: CLI binary not found at %s\n" "$CLI_BINARY" >&2
   exit 1
 fi
 
@@ -381,6 +387,170 @@ NO_SCRIPT=$(rpc '{"jsonrpc":"2.0","id":67,"method":"tools/call","params":{"name"
 assert_contains "missing script returns error"      "$NO_SCRIPT" '"error":'
 assert_contains "error mentions Missing script"     "$NO_SCRIPT" 'Missing script'
 
-# ─── Summary ──────────────────────────────────────────────────────────────────
+# ─── 11. CLI: --help ─────────────────────────────────────────────────────────
+header "11. CLI: --help"
+
+CLI_HELP=$("$CLI_BINARY" --help 2>&1)
+assert_contains "CLI help shows usage line"            "$CLI_HELP" "Usage: omnifocus-cli"
+assert_contains "CLI help lists list-tasks"            "$CLI_HELP" "list-tasks"
+assert_contains "CLI help lists create-task"           "$CLI_HELP" "create-task"
+assert_contains "CLI help lists delete-project"        "$CLI_HELP" "delete-project"
+assert_contains "CLI help lists eval-automation"       "$CLI_HELP" "eval-automation"
+assert_contains "CLI help shows environment variables" "$CLI_HELP" "OF_BACKEND"
+
+# Count commands in help — each tool appears indented with 4 spaces then a lowercase letter
+CLI_CMD_COUNT=$(printf '%s' "$CLI_HELP" | grep -cE '^\s{4}[a-z]' || true)
+if [ "$CLI_CMD_COUNT" -eq 84 ]; then
+  pass "CLI help lists exactly 84 commands (got $CLI_CMD_COUNT)"
+else
+  fail "CLI help command count" "expected 84, got $CLI_CMD_COUNT"
+fi
+
+# ─── 12. CLI: per-command --help ─────────────────────────────────────────────
+header "12. CLI: per-command --help"
+
+CT_HELP=$("$CLI_BINARY" create-task --help 2>&1)
+assert_contains "create-task help shows usage"         "$CT_HELP" "Usage: omnifocus-cli create-task"
+assert_contains "create-task help shows --name"        "$CT_HELP" "--name"
+assert_contains "create-task help shows (required)"    "$CT_HELP" "(required)"
+assert_contains "create-task help shows --project"     "$CT_HELP" "--project"
+assert_contains "create-task help shows --flagged"     "$CT_HELP" "--flagged"
+assert_contains "create-task help shows --tags"        "$CT_HELP" "--tags"
+
+LT_HELP=$("$CLI_BINARY" list-tasks --help 2>&1)
+assert_contains "list-tasks help shows --status"       "$LT_HELP" "--status"
+assert_contains "list-tasks help shows enum values"    "$LT_HELP" "all|available|completed"
+
+LI_HELP=$("$CLI_BINARY" list-inbox --help 2>&1)
+assert_contains "list-inbox help shows no parameters"  "$LI_HELP" "No parameters"
+
+# ─── 13. CLI: unknown command ────────────────────────────────────────────────
+header "13. CLI: unknown command"
+
+UNKNOWN_CMD_OUT=$("$CLI_BINARY" nonexistent-command 2>&1 || true)
+assert_contains "unknown command prints error"         "$UNKNOWN_CMD_OUT" "unknown command"
+
+# ─── 14. CLI: argument parsing ───────────────────────────────────────────────
+header "14. CLI: argument parsing"
+
+BAD_FLAG_OUT=$("$CLI_BINARY" list-tasks --nonexistent-flag value 2>&1 || true)
+assert_contains "unknown flag prints error"            "$BAD_FLAG_OUT" "Unknown flag"
+
+MISSING_VAL_OUT=$("$CLI_BINARY" list-tasks --status 2>&1 || true)
+assert_contains "missing value prints error"           "$MISSING_VAL_OUT" "Missing value"
+
+# ─── 15. CLI: tool dispatch coverage ─────────────────────────────────────────
+# Verify every tool can be invoked via CLI without getting "unknown command".
+header "15. CLI: tool dispatch coverage"
+
+cli_dispatch_check() {
+  local cmd="$1"
+  local out
+  out=$("$CLI_BINARY" "$cmd" 2>&1 || true)
+  if printf '%s' "$out" | grep -qF "unknown command"; then
+    fail "CLI dispatch: $cmd" "got 'unknown command'"
+  else
+    pass "CLI dispatch: $cmd"
+  fi
+}
+
+for tool in \
+  omnifocus_list_tasks omnifocus_list_inbox omnifocus_list_projects \
+  omnifocus_list_tags omnifocus_list_perspectives omnifocus_list_folders \
+  omnifocus_create_folder omnifocus_move_project \
+  omnifocus_list_flagged omnifocus_list_overdue omnifocus_list_available \
+  omnifocus_search_tasks omnifocus_list_task_children omnifocus_get_task_parent \
+  omnifocus_process_inbox omnifocus_set_project_sequential omnifocus_eval_automation \
+  omnifocus_get_task omnifocus_get_project omnifocus_get_tag \
+  omnifocus_create_task omnifocus_create_project omnifocus_create_tag \
+  omnifocus_update_task omnifocus_update_project omnifocus_update_tag \
+  omnifocus_complete_task omnifocus_complete_project \
+  omnifocus_delete_task omnifocus_delete_project omnifocus_delete_tag \
+  omnifocus_uncomplete_task omnifocus_uncomplete_project \
+  omnifocus_append_to_note omnifocus_search_tags omnifocus_set_project_status \
+  omnifocus_get_folder omnifocus_update_folder omnifocus_delete_folder \
+  omnifocus_get_task_counts omnifocus_get_project_counts omnifocus_get_forecast \
+  omnifocus_create_subtask omnifocus_duplicate_task \
+  omnifocus_create_tasks_batch omnifocus_delete_tasks_batch omnifocus_move_tasks_batch \
+  omnifocus_list_notifications omnifocus_add_notification \
+  omnifocus_remove_notification omnifocus_set_task_repetition \
+  omnifocus_mark_reviewed omnifocus_drop_task omnifocus_import_taskpaper \
+  omnifocus_add_relative_notification omnifocus_move_tag omnifocus_move_folder \
+  omnifocus_convert_task_to_project omnifocus_duplicate_project \
+  omnifocus_get_forecast_tag omnifocus_clean_up omnifocus_get_settings \
+  omnifocus_list_linked_files omnifocus_add_linked_file omnifocus_remove_linked_file \
+  omnifocus_search_projects omnifocus_search_folders omnifocus_search_tasks_native \
+  omnifocus_lookup_url omnifocus_get_forecast_days \
+  omnifocus_get_focus omnifocus_set_focus omnifocus_undo omnifocus_redo omnifocus_save \
+  omnifocus_duplicate_tasks_batch omnifocus_duplicate_tags \
+  omnifocus_move_projects_batch omnifocus_reorder_task_tags \
+  omnifocus_copy_tasks omnifocus_paste_tasks \
+  omnifocus_next_repetition_date omnifocus_set_forecast_tag \
+  omnifocus_set_notification_repeat; do
+  cmd=$(printf '%s' "$tool" | sed 's/^omnifocus_//' | tr '_' '-')
+  cli_dispatch_check "$cmd"
+done
+
+# ─── 16. CLI: daemon mode ────────────────────────────────────────────────────
+header "16. CLI: daemon mode"
+
+# Ensure no daemon is running from a previous test
+"$CLI_BINARY" --stop 2>/dev/null || true
+
+# --status when no daemon
+STATUS_OFF=$("$CLI_BINARY" --status 2>&1)
+assert_contains "status reports not running"           "$STATUS_OFF" "not running"
+
+# Start daemon in background
+"$CLI_BINARY" --daemon &
+DAEMON_PID=$!
+sleep 1
+
+# Verify socket created
+if [ -S "$HOME/.omnifocus-cli.sock" ]; then
+  pass "daemon creates socket file"
+else
+  fail "daemon creates socket file" "socket not found at ~/.omnifocus-cli.sock"
+fi
+
+# Verify PID file
+if [ -f "$HOME/.omnifocus-cli.pid" ]; then
+  PID_CONTENT=$(cat "$HOME/.omnifocus-cli.pid")
+  if [ "$PID_CONTENT" = "$DAEMON_PID" ]; then
+    pass "PID file contains correct PID"
+  else
+    pass "PID file exists (PID: $PID_CONTENT)"
+  fi
+else
+  fail "PID file created" "~/.omnifocus-cli.pid not found"
+fi
+
+# --status when daemon is running
+STATUS_ON=$("$CLI_BINARY" --status 2>&1)
+assert_contains "status reports running"               "$STATUS_ON" "Daemon running"
+assert_contains "status shows pid"                     "$STATUS_ON" "pid"
+
+# --stop
+STOP_OUT=$("$CLI_BINARY" --stop 2>&1)
+assert_contains "stop reports success"                 "$STOP_OUT" "stopped"
+sleep 1
+
+# Verify socket removed after stop
+if [ ! -S "$HOME/.omnifocus-cli.sock" ]; then
+  pass "socket removed after stop"
+else
+  fail "socket removed after stop" "socket still exists"
+  rm -f "$HOME/.omnifocus-cli.sock"
+fi
+
+# --status after stop
+STATUS_AFTER=$("$CLI_BINARY" --status 2>&1)
+assert_contains "status reports not running after stop" "$STATUS_AFTER" "not running"
+
+# --stop when no daemon
+STOP_NONE=$("$CLI_BINARY" --stop 2>&1 || true)
+assert_contains "stop when not running shows error"    "$STOP_NONE" "No daemon"
+
+# ─── Summary ─────────────────────────────────────────────────────────────────
 printf "\n${BOLD}Results: %d passed, %d failed${NC}\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

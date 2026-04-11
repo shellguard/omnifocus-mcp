@@ -1,6 +1,6 @@
 // Tool definitions for all 84 OmniFocus MCP tools.
 
-nonisolated(unsafe) let allTools: [ToolDefinition] = [
+nonisolated(unsafe) public let allTools: [ToolDefinition] = [
     ToolDefinition(
         name: "omnifocus_list_tasks",
         description: "List tasks with optional filters.",
