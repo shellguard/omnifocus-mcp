@@ -1,0 +1,68 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build universal binaries
+        run: VERSION=${{ steps.version.outputs.version }} ./scripts/build_universal.sh
+
+      - name: Compute SHA256
+        id: sha
+        run: |
+          TARBALL="dist/omnifocus-mcp-${{ steps.version.outputs.version }}-macos-universal.tar.gz"
+          SHA256=$(shasum -a 256 "$TARBALL" | cut -d' ' -f1)
+          echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
+          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+          echo "SHA256: $SHA256"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: v${{ steps.version.outputs.version }}
+          body: |
+            ## OmniFocus MCP + CLI v${{ steps.version.outputs.version }}
+
+            Universal macOS binary (arm64 + x86_64).
+
+            ### Install via Homebrew
+
+            ```bash
+            brew tap shellguard/omnifocus
+            brew install omnifocus-mcp
+            ```
+
+            ### Manual install
+
+            ```bash
+            tar xzf omnifocus-mcp-${{ steps.version.outputs.version }}-macos-universal.tar.gz
+            sudo mv omnifocus-mcp omnifocus-cli /usr/local/bin/
+            ```
+
+            ### SHA256
+            ```
+            ${{ steps.sha.outputs.sha256 }}  omnifocus-mcp-${{ steps.version.outputs.version }}-macos-universal.tar.gz
+            ```
+          files: |
+            ${{ steps.sha.outputs.tarball }}
+          generate_release_notes: true
+
+      - name: Output formula update values
+        run: |
+          echo "::notice::Update Homebrew formula with:"
+          echo "::notice::  url: https://github.com/shellguard/omnifocus-mcp/releases/download/v${{ steps.version.outputs.version }}/omnifocus-mcp-${{ steps.version.outputs.version }}-macos-universal.tar.gz"
+          echo "::notice::  sha256: ${{ steps.sha.outputs.sha256 }}"
