@@ -44,6 +44,13 @@ Release binaries:
 
 Configure your MCP client to launch `omnifocus-mcp`.
 
+Protocol compatibility:
+
+- Supports MCP protocol versions: `2025-11-25`, `2025-06-18`, `2024-11-05`
+- `initialize` negotiates protocol version (uses requested version when supported, otherwise falls back to latest supported)
+- Accepts both lifecycle notifications: `initialized` (legacy) and `notifications/initialized` (current)
+- `tools/call` execution failures are returned as MCP tool results with `isError: true` (invalid method/tool lookup still use JSON-RPC errors)
+
 Example MCP config:
 
 ```json
@@ -79,6 +86,15 @@ Daemon mode (faster repeated calls):
 ./.build/release/omnifocus-cli --status
 ./.build/release/omnifocus-cli --stop
 ```
+
+Install as launchd user agent (auto-start at login):
+
+```bash
+./.build/release/omnifocus-cli --install
+./.build/release/omnifocus-cli --uninstall
+```
+
+`--install` uses modern `launchctl bootstrap gui/<uid>` with a legacy `load` fallback for older environments.
 
 ## Test
 
@@ -271,3 +287,5 @@ If your binary is not at `/usr/local/bin/omnifocus-mcp`, update `cowork-plugin/.
 - OmniFocus must launch in the current logged-in user session.
 - If OmniFocus path differs, set `OF_APP_PATH`.
 - If Omni Automation API is unavailable, set `OF_BACKEND=jxa`.
+- launchd agent path: `~/Library/LaunchAgents/com.omnifocus-cli.daemon.plist`.
+- launchd installs/uninstalls target the current user domain (`gui/<uid>`).

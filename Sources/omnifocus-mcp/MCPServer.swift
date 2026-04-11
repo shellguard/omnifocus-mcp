@@ -15,6 +15,8 @@ final class MCPServer {
     let stdin = FileHandle.standardInput
 
     let maxBufferSize = 10 * 1024 * 1024 // 10 MB
+    let serverVersion = "0.2.0"
+    let supportedProtocolVersions = ["2025-11-25", "2025-06-18", "2024-11-05"]
 
     func run() {
         var buffer = Data()
@@ -86,10 +88,13 @@ final class MCPServer {
 
         switch method {
         case "initialize":
+            let params = message["params"] as? [String: Any] ?? [:]
+            let requestedVersion = params["protocolVersion"] as? String
+            let negotiatedVersion = negotiateProtocolVersion(requestedVersion)
             let result: [String: Any] = [
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": negotiatedVersion,
                 "capabilities": ["tools": [String: Any]()],
-                "serverInfo": ["name": "omnifocus-mcp", "version": "0.2.0"]
+                "serverInfo": ["name": "omnifocus-mcp", "version": serverVersion]
             ]
             sendResult(id: id, result: result)
         case "tools/list":
@@ -111,17 +116,53 @@ final class MCPServer {
                 throw MCPError.invalidParams("Missing tool name")
             }
             let arguments = params["arguments"] as? [String: Any] ?? [String: Any]()
-            let resultValue = try engine.callTool(named: toolName, arguments: arguments)
-            let jsonText = try OFEngine.serializeToolResult(resultValue)
-            let response: [String: Any] = [
-                "content": [["type": "text", "text": jsonText]]
-            ]
-            sendResult(id: id, result: response)
-        case "initialized", "shutdown", "exit":
+            do {
+                let resultValue = try engine.callTool(named: toolName, arguments: arguments)
+                let jsonText = try OFEngine.serializeToolResult(resultValue)
+                let response: [String: Any] = [
+                    "content": [["type": "text", "text": jsonText]]
+                ]
+                sendResult(id: id, result: response)
+            } catch let error as MCPError {
+                switch error {
+                case .toolNotFound:
+                    throw error
+                case .invalidParams, .toolError, .scriptError:
+                    sendToolErrorResult(id: id, message: error.description)
+                case .invalidRequest, .methodNotFound:
+                    throw error
+                }
+            } catch {
+                sendToolErrorResult(id: id, message: "Internal tool execution error: \(error.localizedDescription)")
+            }
+        case "initialized", "notifications/initialized":
+            return
+        case "shutdown":
+            sendResult(id: id, result: [:])
+            return
+        case "exit":
             return
         default:
             throw MCPError.methodNotFound("Unknown method: \(method ?? "")")
         }
+    }
+
+    func negotiateProtocolVersion(_ requestedVersion: String?) -> String {
+        guard let requestedVersion else {
+            return supportedProtocolVersions[0]
+        }
+        if supportedProtocolVersions.contains(requestedVersion) {
+            return requestedVersion
+        }
+        return supportedProtocolVersions[0]
+    }
+
+    func sendToolErrorResult(id: Any?, message: String) {
+        let response: [String: Any] = [
+            "content": [["type": "text", "text": message]],
+            "isError": true
+        ]
+        sendResult(id: id, result: response)
     }
 
     func sendResult(id: Any?, result: [String: Any]) {

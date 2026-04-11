@@ -54,6 +54,19 @@ Both JS scripts must stay in sync whenever a new action is added.
 
 This means there is no additional Swift-side action switch to update, but every new tool still needs matching JS implementation + JS `switch (action)` entries in both backends.
 
+### MCP Protocol Behavior
+
+- Supported protocol versions: `2025-11-25`, `2025-06-18`, `2024-11-05`.
+- `initialize` negotiates the protocol version: use requested version when supported, otherwise fall back to latest supported.
+- Accept both lifecycle notification names: `initialized` and `notifications/initialized`.
+- In `tools/call`, tool execution failures are returned in-result with `isError: true`; keep JSON-RPC errors for protocol-level failures (unknown method/tool, malformed request).
+
+### launchd Integration (CLI)
+
+- `omnifocus-cli --install` uses `launchctl bootstrap gui/<uid> <plist>` (with `load` fallback).
+- `omnifocus-cli --uninstall` uses `launchctl bootout gui/<uid>/<label>` (with `unload` fallback).
+- Socket path handling validates UNIX socket path length before bind/connect to avoid silent truncation failures.
+
 ## Adding a New Tool — Checklist
 
 1. If the function uses only shared utilities, add to **`JSShared.swift`** (otherwise add to each backend)

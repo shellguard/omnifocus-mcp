@@ -5,6 +5,7 @@ let socketPath = (NSString("~/.omnifocus-cli.sock").expandingTildeInPath)
 let pidPath = (NSString("~/.omnifocus-cli.pid").expandingTildeInPath)
 let launchdLabel = "com.omnifocus-cli.daemon"
 let launchdPlistPath = (NSString(string: "~/Library/LaunchAgents/\(launchdLabel).plist").expandingTildeInPath)
+let launchdLogPath = "/tmp/omnifocus-cli-daemon.log"
 nonisolated(unsafe) var daemonStartTime = Date()
 
 @main
@@ -89,12 +90,9 @@ struct OmniFocusCLI {
             exit(1)
         }
 
-        var addr = sockaddr_un()
-        addr.sun_family = sa_family_t(AF_UNIX)
-        withUnsafeMutablePointer(to: &addr.sun_path) { pathPtr in
-            pathPtr.withMemoryRebound(to: CChar.self, capacity: 104) { buf in
-                _ = socketPath.withCString { strncpy(buf, $0, 103) }
-            }
+        guard var addr = socketAddress(for: socketPath, reportErrors: true) else {
+            close(fd)
+            exit(1)
         }
 
         let bindResult = withUnsafePointer(to: &addr) { ptr in
@@ -220,6 +218,58 @@ struct OmniFocusCLI {
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
     }
 
+    static func socketAddress(for path: String, reportErrors: Bool) -> sockaddr_un? {
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        let capacity = MemoryLayout.size(ofValue: addr.sun_path)
+        let maxBytes = capacity - 1
+        let pathBytes = path.lengthOfBytes(using: .utf8)
+        guard pathBytes <= maxBytes else {
+            if reportErrors {
+                fputs("Error: socket path is too long (\(pathBytes) bytes). Maximum for this platform is \(maxBytes) bytes.\n", stderr)
+                fputs("       Path: \(path)\n", stderr)
+            }
+            return nil
+        }
+
+        withUnsafeMutablePointer(to: &addr.sun_path) { pathPtr in
+            pathPtr.withMemoryRebound(to: CChar.self, capacity: capacity) { buf in
+                memset(buf, 0, capacity)
+                _ = path.withCString { strncpy(buf, $0, maxBytes) }
+            }
+        }
+        return addr
+    }
+
+    static func launchdDomainTarget() -> String {
+        "gui/\(getuid())"
+    }
+
+    static func launchdServiceTarget() -> String {
+        "\(launchdDomainTarget())/\(launchdLabel)"
+    }
+
+    static func runLaunchctl(_ arguments: [String]) -> (status: Int32, stderrText: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = arguments
+
+        let stderrPipe = Pipe()
+        process.standardError = stderrPipe
+        process.standardOutput = Pipe()
+
+        do {
+            try process.run()
+        } catch {
+            return (-1, error.localizedDescription)
+        }
+        process.waitUntilExit()
+        let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+        let stderrText = String(data: stderrData, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return (process.terminationStatus, stderrText)
+    }
+
     // MARK: - Socket client
 
     static func sendToDaemon(toolName: String, arguments: [String: Any]) -> String? {
@@ -229,13 +279,7 @@ struct OmniFocusCLI {
         guard fd >= 0 else { return nil }
         defer { close(fd) }
 
-        var addr = sockaddr_un()
-        addr.sun_family = sa_family_t(AF_UNIX)
-        withUnsafeMutablePointer(to: &addr.sun_path) { pathPtr in
-            pathPtr.withMemoryRebound(to: CChar.self, capacity: 104) { buf in
-                _ = socketPath.withCString { strncpy(buf, $0, 103) }
-            }
-        }
+        guard var addr = socketAddress(for: socketPath, reportErrors: false) else { return nil }
 
         let connectResult = withUnsafePointer(to: &addr) { ptr in
             ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
@@ -286,13 +330,7 @@ struct OmniFocusCLI {
         guard fd >= 0 else { return nil }
         defer { close(fd) }
 
-        var addr = sockaddr_un()
-        addr.sun_family = sa_family_t(AF_UNIX)
-        withUnsafeMutablePointer(to: &addr.sun_path) { pathPtr in
-            pathPtr.withMemoryRebound(to: CChar.self, capacity: 104) { buf in
-                _ = socketPath.withCString { strncpy(buf, $0, 103) }
-            }
-        }
+        guard var addr = socketAddress(for: socketPath, reportErrors: false) else { return nil }
 
         let connectResult = withUnsafePointer(to: &addr) { ptr in
             ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
@@ -382,7 +420,7 @@ struct OmniFocusCLI {
             <key>KeepAlive</key>
             <true/>
             <key>StandardErrorPath</key>
-            <string>/tmp/omnifocus-cli-daemon.log</string>
+            <string>\(launchdLogPath)</string>
         </dict>
         </plist>
         """
@@ -394,32 +432,45 @@ struct OmniFocusCLI {
             exit(1)
         }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        process.arguments = ["load", launchdPlistPath]
-        try? process.run()
-        process.waitUntilExit()
-
-        if process.terminationStatus == 0 {
+        // Make re-installs idempotent: best-effort bootout before bootstrap.
+        _ = runLaunchctl(["bootout", launchdServiceTarget()])
+        let bootstrap = runLaunchctl(["bootstrap", launchdDomainTarget(), launchdPlistPath])
+        if bootstrap.status == 0 {
             print("Daemon installed and started.")
             print("  Plist: \(launchdPlistPath)")
             print("  Binary: \(resolvedPath)")
-            print("  Log: /tmp/omnifocus-cli-daemon.log")
-        } else {
-            fputs("Warning: plist written but launchctl load failed.\n", stderr)
-            fputs("  Try: launchctl load \(launchdPlistPath)\n", stderr)
+            print("  Log: \(launchdLogPath)")
+            return
         }
+
+        // Older systems may still rely on load/unload style behavior.
+        let legacyLoad = runLaunchctl(["load", launchdPlistPath])
+        if legacyLoad.status == 0 {
+            print("Daemon installed and started.")
+            print("  Plist: \(launchdPlistPath)")
+            print("  Binary: \(resolvedPath)")
+            print("  Log: \(launchdLogPath)")
+            return
+        }
+
+        fputs("Warning: plist written but launchctl bootstrap/load failed.\n", stderr)
+        if !bootstrap.stderrText.isEmpty {
+            fputs("  bootstrap error: \(bootstrap.stderrText)\n", stderr)
+        }
+        if !legacyLoad.stderrText.isEmpty {
+            fputs("  load error: \(legacyLoad.stderrText)\n", stderr)
+        }
+        fputs("  Try: launchctl bootstrap \(launchdDomainTarget()) \(launchdPlistPath)\n", stderr)
     }
 
     static func uninstallLaunchd() {
         // Stop daemon first
         let _ = sendDaemonCommand("__shutdown__")
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        process.arguments = ["unload", launchdPlistPath]
-        try? process.run()
-        process.waitUntilExit()
+        let bootout = runLaunchctl(["bootout", launchdServiceTarget()])
+        if bootout.status != 0 {
+            _ = runLaunchctl(["unload", launchdPlistPath])
+        }
 
         if FileManager.default.fileExists(atPath: launchdPlistPath) {
             try? FileManager.default.removeItem(atPath: launchdPlistPath)

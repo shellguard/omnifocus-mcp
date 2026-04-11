@@ -91,10 +91,10 @@ fi
 
 # ── Test suite ────────────────────────────────────────────────────────────────
 
-# ─── 1. initialize ────────────────────────────────────────────────────────────
+# ─── 1. initialize/version negotiation ────────────────────────────────────────
 header "1. initialize"
 
-INIT_MSG='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"0"}}}'
+INIT_MSG='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","clientInfo":{"name":"test","version":"0"}}}'
 INIT_OUT=$(rpc "$INIT_MSG")
 
 assert_contains     "returns jsonrpc 2.0"          "$INIT_OUT" '"jsonrpc":"2.0"'
@@ -106,10 +106,16 @@ else
 fi
 assert_contains     "has result field"             "$INIT_OUT" '"result":'
 assert_not_contains "no error field"               "$INIT_OUT" '"error":'
-assert_contains     "protocolVersion 2024-11-05"   "$INIT_OUT" '"protocolVersion":"2024-11-05"'
+assert_contains     "protocolVersion 2025-11-25"   "$INIT_OUT" '"protocolVersion":"2025-11-25"'
 assert_contains     "capabilities field present"   "$INIT_OUT" '"capabilities":'
 assert_contains     "serverInfo name"              "$INIT_OUT" '"name":"omnifocus-mcp"'
 assert_contains     "serverInfo version is 0.2.0"  "$INIT_OUT" '"version":"0.2.0"'
+
+LEGACY_INIT_OUT=$(rpc '{"jsonrpc":"2.0","id":11,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"0"}}}')
+assert_contains "legacy protocol request accepted" "$LEGACY_INIT_OUT" '"protocolVersion":"2024-11-05"'
+
+FALLBACK_INIT_OUT=$(rpc '{"jsonrpc":"2.0","id":12,"method":"initialize","params":{"protocolVersion":"2099-01-01","clientInfo":{"name":"test","version":"0"}}}')
+assert_contains "unknown protocol falls back to latest supported" "$FALLBACK_INIT_OUT" '"protocolVersion":"2025-11-25"'
 
 # ─── 2. tools/list ────────────────────────────────────────────────────────────
 header "2. tools/list"
@@ -199,7 +205,7 @@ else
   fail "destructive annotation count" "expected 8, got $DE_COUNT"
 fi
 
-# ─── 4. tools/call — error cases (no OmniFocus needed) ───────────────────────
+# ─── 4. tools/call error handling ─────────────────────────────────────────────
 header "4. tools/call error handling"
 
 # Unknown tool → -32602 (toolNotFound, caught before any script is run)
@@ -212,6 +218,13 @@ assert_not_contains "unknown tool has no result"     "$UNKNOWN_OUT" '"result":'
 MISSING_NAME_OUT=$(rpc '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{}}')
 assert_contains "missing tool name returns error"    "$MISSING_NAME_OUT" '"error":'
 assert_contains "missing tool name code -32602"      "$MISSING_NAME_OUT" '-32602'
+
+# Tool execution failures should be encoded in result.isError, not JSON-RPC error.
+TOOL_EXEC_ERROR_OUT=$(rpc '{"jsonrpc":"2.0","id":41,"method":"tools/call","params":{"name":"omnifocus_eval_automation","arguments":{}}}')
+assert_contains     "tool execution failure returns result envelope" "$TOOL_EXEC_ERROR_OUT" '"result":'
+assert_contains     "tool execution failure sets isError"            "$TOOL_EXEC_ERROR_OUT" '"isError":true'
+assert_not_contains "tool execution failure avoids JSON-RPC error"   "$TOOL_EXEC_ERROR_OUT" '"error":'
+assert_contains     "tool execution failure includes message"         "$TOOL_EXEC_ERROR_OUT" 'Missing script'
 
 # ─── 5. JSON-RPC protocol errors ──────────────────────────────────────────────
 header "5. JSON-RPC protocol errors"
@@ -316,19 +329,20 @@ fi
 header "8. Notification messages (no response)"
 
 # Send initialize + notifications together; only the initialize should respond.
-MIXED_OUT=$(printf '%s\n%s\n%s\n' \
-  '{"jsonrpc":"2.0","id":20,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"0"}}}' \
+MIXED_OUT=$(printf '%s\n%s\n%s\n%s\n' \
+  '{"jsonrpc":"2.0","id":20,"method":"initialize","params":{"protocolVersion":"2025-11-25","clientInfo":{"name":"test","version":"0"}}}' \
   '{"jsonrpc":"2.0","method":"initialized"}' \
+  '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
   '{"jsonrpc":"2.0","method":"shutdown"}' \
   | OF_BACKEND=jxa "$BINARY" 2>/dev/null)
 
 # The initialize must respond (proves binary was alive and processed input)
 assert_contains "initialize response present in mixed batch" "$MIXED_OUT" '"id":20'
 
-# There must be exactly one response line (only initialize, not initialized/shutdown)
+# There must be exactly one response line (only initialize, not notifications)
 RESPONSE_COUNT=$(printf '%s\n' "$MIXED_OUT" | grep -c '"jsonrpc"' || true)
 if [ "$RESPONSE_COUNT" -eq 1 ]; then
-  pass "exactly one response (notifications produce no output)"
+  pass "exactly one response (initialized notifications produce no output)"
 else
   fail "notification response count" "expected 1 response, got $RESPONSE_COUNT"
   printf '    output: %s\n' "$MIXED_OUT"
@@ -349,7 +363,7 @@ INJECT_OUT=$(printf '%s\n' \
   '{"jsonrpc":"2.0","id":31,"method":"tools/call","params":{"name":"omnifocus_list_tasks","arguments":{}}}' \
   | OF_BACKEND=automation OF_APP_PATH='/Applications/OmniFocus.app"; do shell script "id"' \
     "$BINARY" 2>/dev/null || true)
-assert_contains     "unsafe OF_APP_PATH is rejected"      "$INJECT_OUT" '"error":'
+assert_contains     "unsafe OF_APP_PATH is rejected"      "$INJECT_OUT" '"isError":true'
 assert_contains     "error cites unsafe characters"       "$INJECT_OUT" "unsafe characters"
 
 # ─── 10. eval_automation deny-list ────────────────────────────────────────────
@@ -357,22 +371,22 @@ header "10. eval_automation deny-list"
 
 # Destructive dot-notation blocked
 DENY_DOT=$(rpc '{"jsonrpc":"2.0","id":60,"method":"tools/call","params":{"name":"omnifocus_eval_automation","arguments":{"script":"task.delete()"}}}')
-assert_contains "dot-notation .delete() blocked"    "$DENY_DOT" '"error":'
+assert_contains "dot-notation .delete() blocked"    "$DENY_DOT" '"isError":true'
 assert_contains "error mentions destructive"        "$DENY_DOT" 'destructive'
 
 # Destructive bracket-notation blocked
 DENY_BRACKET=$(rpc "{\"jsonrpc\":\"2.0\",\"id\":61,\"method\":\"tools/call\",\"params\":{\"name\":\"omnifocus_eval_automation\",\"arguments\":{\"script\":\"task['delete']()\"}}}")
-assert_contains "bracket-notation ['delete']() blocked" "$DENY_BRACKET" '"error":'
+assert_contains "bracket-notation ['delete']() blocked" "$DENY_BRACKET" '"isError":true'
 
 # Other destructive patterns
 DENY_DROP=$(rpc '{"jsonrpc":"2.0","id":62,"method":"tools/call","params":{"name":"omnifocus_eval_automation","arguments":{"script":"task.drop(false)"}}}')
-assert_contains ".drop() blocked"                   "$DENY_DROP" '"error":'
+assert_contains ".drop() blocked"                   "$DENY_DROP" '"isError":true'
 
 DENY_DELETEOBJ=$(rpc '{"jsonrpc":"2.0","id":63,"method":"tools/call","params":{"name":"omnifocus_eval_automation","arguments":{"script":"deleteObject(task)"}}}')
-assert_contains "deleteObject() blocked"            "$DENY_DELETEOBJ" '"error":'
+assert_contains "deleteObject() blocked"            "$DENY_DELETEOBJ" '"isError":true'
 
 DENY_CLEANUP=$(rpc '{"jsonrpc":"2.0","id":64,"method":"tools/call","params":{"name":"omnifocus_eval_automation","arguments":{"script":"cleanUp()"}}}')
-assert_contains "cleanUp() blocked"                 "$DENY_CLEANUP" '"error":'
+assert_contains "cleanUp() blocked"                 "$DENY_CLEANUP" '"isError":true'
 
 # Safe script passes deny-list
 SAFE_SCRIPT=$(rpc '{"jsonrpc":"2.0","id":65,"method":"tools/call","params":{"name":"omnifocus_eval_automation","arguments":{"script":"JSON.stringify({ok:1})"}}}')
@@ -384,7 +398,7 @@ assert_not_contains "allowDestructive passes"       "$ALLOW_DEST" 'destructive'
 
 # Missing script parameter
 NO_SCRIPT=$(rpc '{"jsonrpc":"2.0","id":67,"method":"tools/call","params":{"name":"omnifocus_eval_automation","arguments":{}}}')
-assert_contains "missing script returns error"      "$NO_SCRIPT" '"error":'
+assert_contains "missing script returns isError result" "$NO_SCRIPT" '"isError":true'
 assert_contains "error mentions Missing script"     "$NO_SCRIPT" 'Missing script'
 
 # ─── 11. CLI: --help ─────────────────────────────────────────────────────────
@@ -501,55 +515,73 @@ header "16. CLI: daemon mode"
 STATUS_OFF=$("$CLI_BINARY" --status 2>&1)
 assert_contains "status reports not running"           "$STATUS_OFF" "not running"
 
-# Start daemon in background
-"$CLI_BINARY" --daemon &
+DAEMON_LOG=$(mktemp)
+"$CLI_BINARY" --daemon >"$DAEMON_LOG" 2>&1 &
 DAEMON_PID=$!
 sleep 1
 
-# Verify socket created
-if [ -S "$HOME/.omnifocus-cli.sock" ]; then
-  pass "daemon creates socket file"
-else
-  fail "daemon creates socket file" "socket not found at ~/.omnifocus-cli.sock"
-fi
-
-# Verify PID file
-if [ -f "$HOME/.omnifocus-cli.pid" ]; then
-  PID_CONTENT=$(cat "$HOME/.omnifocus-cli.pid")
-  if [ "$PID_CONTENT" = "$DAEMON_PID" ]; then
-    pass "PID file contains correct PID"
+if ! kill -0 "$DAEMON_PID" 2>/dev/null; then
+  DAEMON_START_ERR=$(cat "$DAEMON_LOG")
+  if printf '%s' "$DAEMON_START_ERR" | grep -qiE "operation not permitted|permission denied"; then
+    skip "daemon runtime checks (socket bind not permitted in this environment)"
   else
-    pass "PID file exists (PID: $PID_CONTENT)"
+    fail "daemon starts successfully" "startup failed: $DAEMON_START_ERR"
   fi
 else
-  fail "PID file created" "~/.omnifocus-cli.pid not found"
+  # Verify socket created
+  if [ -S "$HOME/.omnifocus-cli.sock" ]; then
+    pass "daemon creates socket file"
+  else
+    fail "daemon creates socket file" "socket not found at ~/.omnifocus-cli.sock"
+  fi
+
+  # Verify PID file
+  if [ -f "$HOME/.omnifocus-cli.pid" ]; then
+    PID_CONTENT=$(cat "$HOME/.omnifocus-cli.pid")
+    if [ "$PID_CONTENT" = "$DAEMON_PID" ]; then
+      pass "PID file contains correct PID"
+    else
+      pass "PID file exists (PID: $PID_CONTENT)"
+    fi
+  else
+    fail "PID file created" "~/.omnifocus-cli.pid not found"
+  fi
+
+  # --status when daemon is running
+  STATUS_ON=$("$CLI_BINARY" --status 2>&1)
+  assert_contains "status reports running"               "$STATUS_ON" "Daemon running"
+  assert_contains "status shows pid"                     "$STATUS_ON" "pid"
+
+  # --stop
+  STOP_OUT=$("$CLI_BINARY" --stop 2>&1)
+  assert_contains "stop reports success"                 "$STOP_OUT" "stopped"
+  sleep 1
+
+  # Verify socket removed after stop
+  if [ ! -S "$HOME/.omnifocus-cli.sock" ]; then
+    pass "socket removed after stop"
+  else
+    fail "socket removed after stop" "socket still exists"
+    rm -f "$HOME/.omnifocus-cli.sock"
+  fi
+
+  # --status after stop
+  STATUS_AFTER=$("$CLI_BINARY" --status 2>&1)
+  assert_contains "status reports not running after stop" "$STATUS_AFTER" "not running"
 fi
-
-# --status when daemon is running
-STATUS_ON=$("$CLI_BINARY" --status 2>&1)
-assert_contains "status reports running"               "$STATUS_ON" "Daemon running"
-assert_contains "status shows pid"                     "$STATUS_ON" "pid"
-
-# --stop
-STOP_OUT=$("$CLI_BINARY" --stop 2>&1)
-assert_contains "stop reports success"                 "$STOP_OUT" "stopped"
-sleep 1
-
-# Verify socket removed after stop
-if [ ! -S "$HOME/.omnifocus-cli.sock" ]; then
-  pass "socket removed after stop"
-else
-  fail "socket removed after stop" "socket still exists"
-  rm -f "$HOME/.omnifocus-cli.sock"
-fi
-
-# --status after stop
-STATUS_AFTER=$("$CLI_BINARY" --status 2>&1)
-assert_contains "status reports not running after stop" "$STATUS_AFTER" "not running"
+rm -f "$DAEMON_LOG"
 
 # --stop when no daemon
 STOP_NONE=$("$CLI_BINARY" --stop 2>&1 || true)
 assert_contains "stop when not running shows error"    "$STOP_NONE" "No daemon"
+
+# ─── 17. CLI: launchd command compatibility ──────────────────────────────────
+header "17. CLI: launchd command compatibility"
+
+CLI_SOURCE=$(cat "$ROOT_DIR/Sources/omnifocus-cli/CLI.swift")
+assert_contains "launchd integration uses bootstrap"    "$CLI_SOURCE" 'runLaunchctl(["bootstrap", launchdDomainTarget(), launchdPlistPath])'
+assert_contains "launchd integration uses bootout"      "$CLI_SOURCE" 'runLaunchctl(["bootout", launchdServiceTarget()])'
+assert_contains "launchd integration targets gui/<uid>" "$CLI_SOURCE" '"gui/\(getuid())"'
 
 # ─── Summary ─────────────────────────────────────────────────────────────────
 printf "\n${BOLD}Results: %d passed, %d failed${NC}\n" "$PASS" "$FAIL"
