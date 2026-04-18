@@ -101,8 +101,14 @@ public final class OFEngine: @unchecked Sendable {
         process.standardError = stderrPipe
 
         try process.run()
-        nonisolated(unsafe) var timedOut = false
-        let timeoutItem = DispatchWorkItem { timedOut = true; process.terminate() }
+        let timedOutFlag = NSLock()
+        nonisolated(unsafe) var _timedOut = false
+        let timeoutItem = DispatchWorkItem {
+            timedOutFlag.lock()
+            _timedOut = true
+            timedOutFlag.unlock()
+            process.terminate()
+        }
         DispatchQueue.global().asyncAfter(deadline: .now() + 30, execute: timeoutItem)
 
         // Drain pipes concurrently to avoid deadlock when output exceeds pipe buffer (~64KB)
@@ -117,6 +123,9 @@ public final class OFEngine: @unchecked Sendable {
         group.wait()
         timeoutItem.cancel()
 
+        timedOutFlag.lock()
+        let timedOut = _timedOut
+        timedOutFlag.unlock()
         if timedOut {
             throw MCPError.scriptError("OmniFocus script timed out after 30 seconds")
         }
@@ -182,8 +191,14 @@ public final class OFEngine: @unchecked Sendable {
         process.standardError = stderrPipe
 
         try process.run()
-        nonisolated(unsafe) var timedOut = false
-        let timeoutItem = DispatchWorkItem { timedOut = true; process.terminate() }
+        let timedOutFlag = NSLock()
+        nonisolated(unsafe) var _timedOut = false
+        let timeoutItem = DispatchWorkItem {
+            timedOutFlag.lock()
+            _timedOut = true
+            timedOutFlag.unlock()
+            process.terminate()
+        }
         DispatchQueue.global().asyncAfter(deadline: .now() + 30, execute: timeoutItem)
 
         // Drain pipes concurrently to avoid deadlock when output exceeds pipe buffer (~64KB)
@@ -198,6 +213,9 @@ public final class OFEngine: @unchecked Sendable {
         group.wait()
         timeoutItem.cancel()
 
+        timedOutFlag.lock()
+        let timedOut = _timedOut
+        timedOutFlag.unlock()
         if timedOut {
             throw MCPError.scriptError("OmniFocus script timed out after 30 seconds")
         }

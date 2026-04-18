@@ -115,7 +115,11 @@ struct OmniFocusCLI {
         }
 
         // Restrict socket to owner only (0600)
-        chmod(socketPath, 0o600)
+        if chmod(socketPath, 0o600) != 0 {
+            fputs("Error: failed to set socket permissions: \(String(cString: strerror(errno)))\n", stderr)
+            close(fd)
+            exit(1)
+        }
 
         guard listen(fd, 8) == 0 else {
             fputs("Error: failed to listen on socket\n", stderr)
@@ -371,7 +375,28 @@ struct OmniFocusCLI {
             print("Daemon stopped.")
         } else if FileManager.default.fileExists(atPath: pidPath),
                   let pidStr = try? String(contentsOfFile: pidPath, encoding: .utf8),
-                  let pid = Int32(pidStr.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                  let pid = Int32(pidStr.trimmingCharacters(in: .whitespacesAndNewlines)),
+                  pid > 0 {
+            // Verify the PID belongs to omnifocus-cli before sending SIGTERM
+            let probe = Process()
+            probe.executableURL = URL(fileURLWithPath: "/bin/ps")
+            probe.arguments = ["-p", "\(pid)", "-o", "comm="]
+            let pipe = Pipe()
+            probe.standardOutput = pipe
+            probe.standardError = Pipe()
+            var isOurProcess = false
+            if let _ = try? probe.run() {
+                probe.waitUntilExit()
+                let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                isOurProcess = output.hasSuffix("omnifocus-cli")
+            }
+            guard isOurProcess else {
+                fputs("Stale PID file (process \(pid) is not omnifocus-cli). Cleaning up.\n", stderr)
+                unlink(socketPath)
+                unlink(pidPath)
+                return
+            }
             kill(pid, SIGTERM)
             unlink(socketPath)
             unlink(pidPath)
@@ -409,12 +434,10 @@ struct OmniFocusCLI {
             resolvedPath = FileManager.default.currentDirectoryPath + "/" + binaryPath
         }
 
-        let escapedPath = resolvedPath
-            .replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
-            .replacingOccurrences(of: "\"", with: "&quot;")
-            .replacingOccurrences(of: "'", with: "&apos;")
+        let escapedPath = escapeXML(resolvedPath)
+
+        let escapedLabel = escapeXML(launchdLabel)
+        let escapedLogPath = escapeXML(launchdLogPath)
 
         let plist = """
         <?xml version="1.0" encoding="UTF-8"?>
@@ -422,7 +445,7 @@ struct OmniFocusCLI {
         <plist version="1.0">
         <dict>
             <key>Label</key>
-            <string>\(launchdLabel)</string>
+            <string>\(escapedLabel)</string>
             <key>ProgramArguments</key>
             <array>
                 <string>\(escapedPath)</string>
@@ -433,7 +456,7 @@ struct OmniFocusCLI {
             <key>KeepAlive</key>
             <true/>
             <key>StandardErrorPath</key>
-            <string>\(launchdLogPath)</string>
+            <string>\(escapedLogPath)</string>
         </dict>
         </plist>
         """
@@ -709,6 +732,14 @@ struct OmniFocusCLI {
             result += ch.lowercased()
         }
         return result
+    }
+
+    static func escapeXML(_ s: String) -> String {
+        s.replacingOccurrences(of: "&", with: "&amp;")
+         .replacingOccurrences(of: "<", with: "&lt;")
+         .replacingOccurrences(of: ">", with: "&gt;")
+         .replacingOccurrences(of: "\"", with: "&quot;")
+         .replacingOccurrences(of: "'", with: "&apos;")
     }
 
     static func pad(_ s: String, to width: Int) -> String {
