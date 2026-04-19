@@ -831,6 +831,9 @@ function createTag(params) {
     properties.active = params.active;
   }
   var tag = doc.make({new: 'tag', withProperties: properties});
+  if (params.childrenAreMutuallyExclusive !== undefined) {
+    safeSet(tag, 'childrenAreMutuallyExclusive', params.childrenAreMutuallyExclusive);
+  }
   return tagToJSON(tag);
 }
 
@@ -1034,6 +1037,9 @@ function updateTag(params) {
   }
   if (params.allowsNextAction !== undefined) {
     safeSet(tag, 'allowsNextAction', params.allowsNextAction);
+  }
+  if (params.childrenAreMutuallyExclusive !== undefined) {
+    safeSet(tag, 'childrenAreMutuallyExclusive', params.childrenAreMutuallyExclusive);
   }
   return tagToJSON(tag);
 }
@@ -1945,6 +1951,31 @@ function setNotificationRepeat(params) {
   throw new Error('Notification not found');
 }
 
+function revealItem(params) {
+  var doc = getDocument();
+  var id = normalizeId(params.id);
+  var obj = null;
+  var typeName = '';
+
+  obj = findTaskById(doc, id);
+  if (obj) { typeName = 'task'; }
+  if (!obj) { obj = findProjectById(doc, id); if (obj) typeName = 'project'; }
+  if (!obj) { obj = findTagById(doc, id); if (obj) typeName = 'tag'; }
+  if (!obj) { obj = findFolderById(doc, id); if (obj) typeName = 'folder'; }
+  if (!obj) { throw new Error('Item not found: ' + params.id); }
+
+  // Use omnifocus:/// URL scheme to reveal the item
+  var urlStr = 'omnifocus:///' + typeName + '/' + id;
+  var app = Application.currentApplication();
+  app.includeStandardAdditions = true;
+  try {
+    app.openLocation(urlStr);
+    return {revealed: true, type: typeName, id: id, url: urlStr};
+  } catch (e) {
+    return {revealed: false, type: typeName, id: id, url: urlStr, reason: e.message};
+  }
+}
+
 var input = readInput();
 var action = input.action;
 var params = input.params || {};
@@ -2199,6 +2230,9 @@ switch (action) {
     break;
   case 'set_notification_repeat':
     result = setNotificationRepeat(params);
+    break;
+  case 'reveal':
+    result = revealItem(params);
     break;
   default:
     throw new Error('Unknown action: ' + action);

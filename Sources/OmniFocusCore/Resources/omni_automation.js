@@ -1153,6 +1153,9 @@
     if (!tag) {
       throw new Error('Unable to create tag');
     }
+    if (params.childrenAreMutuallyExclusive !== undefined) {
+      safeSet(tag, 'childrenAreMutuallyExclusive', params.childrenAreMutuallyExclusive);
+    }
     return tagToJSON(tag);
   }
 
@@ -1330,6 +1333,9 @@
     }
     if (params.allowsNextAction !== undefined) {
       safeSet(tag, 'allowsNextAction', params.allowsNextAction);
+    }
+    if (params.childrenAreMutuallyExclusive !== undefined) {
+      safeSet(tag, 'childrenAreMutuallyExclusive', params.childrenAreMutuallyExclusive);
     }
     return tagToJSON(tag);
   }
@@ -2477,6 +2483,36 @@
     throw new Error('Notification not found');
   }
 
+  function revealItem(params) {
+    var doc = getDatabase();
+    var id = normalizeId(params.id);
+    var obj = null;
+    var typeName = '';
+
+    obj = findTaskById(doc, id);
+    if (obj) { typeName = 'task'; }
+    if (!obj) { obj = findProjectById(doc, id); if (obj) typeName = 'project'; }
+    if (!obj) { obj = findTagById(doc, id); if (obj) typeName = 'tag'; }
+    if (!obj) { obj = findFolderById(doc, id); if (obj) typeName = 'folder'; }
+    if (!obj) { throw new Error('Item not found: ' + params.id); }
+
+    // Build omnifocus:///task/ID URL scheme and open it
+    var urlStr = 'omnifocus:///' + typeName + '/' + id;
+    if (typeof URL !== 'undefined' && typeof URL.fromString === 'function') {
+      var url = URL.fromString(urlStr);
+      if (url && typeof url.open === 'function') {
+        url.open();
+        return {revealed: true, type: typeName, id: id, url: urlStr};
+      }
+    }
+    // Fallback: try app.openURL if available
+    if (typeof app !== 'undefined' && typeof app.openURL === 'function') {
+      app.openURL(urlStr);
+      return {revealed: true, type: typeName, id: id, url: urlStr};
+    }
+    return {revealed: false, type: typeName, id: id, url: urlStr, reason: 'URL open not available in this context'};
+  }
+
   function encodeResult(value) {
     if (value === undefined) {
       return 'null';
@@ -2742,6 +2778,9 @@
       break;
     case 'set_notification_repeat':
       result = setNotificationRepeat(params);
+      break;
+    case 'reveal':
+      result = revealItem(params);
       break;
     default:
       throw new Error('Unknown action: ' + action);

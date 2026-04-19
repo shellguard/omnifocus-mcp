@@ -143,7 +143,7 @@ Package output: `./dist/`
 
 ## Tool Catalog
 
-Current MCP catalog: **84 tools**.
+Current MCP catalog: **85 tools**.
 
 Source of truth:
 
@@ -254,6 +254,10 @@ Dates use ISO 8601 strings.
 - `omnifocus_set_forecast_tag`
 - `omnifocus_reorder_task_tags`
 - `omnifocus_import_taskpaper`
+
+### UI interaction
+
+- `omnifocus_reveal`
 
 ### Maintenance / power tools
 

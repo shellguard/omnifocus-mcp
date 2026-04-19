@@ -113,7 +113,7 @@ assert_not_contains "no error field"               "$INIT_OUT" '"error":'
 assert_contains     "protocolVersion 2025-11-25"   "$INIT_OUT" '"protocolVersion":"2025-11-25"'
 assert_contains     "capabilities field present"   "$INIT_OUT" '"capabilities":'
 assert_contains     "serverInfo name"              "$INIT_OUT" '"name":"omnifocus-mcp"'
-assert_contains     "serverInfo version is 0.4.0"  "$INIT_OUT" '"version":"0.4.0"'
+assert_contains     "serverInfo version is 0.4.1"  "$INIT_OUT" '"version":"0.4.1"'
 
 LEGACY_INIT_OUT=$(rpc '{"jsonrpc":"2.0","id":11,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"0"}}}')
 assert_contains "legacy protocol request accepted" "$LEGACY_INIT_OUT" '"protocolVersion":"2024-11-05"'
@@ -134,8 +134,8 @@ assert_not_contains "no error"         "$LIST_OUT" '"error":'
 # Count tool entries — count "name":"omnifocus_ occurrences inside "tools" list.
 # Each tool definition has exactly one name key starting with omnifocus_.
 TOOL_COUNT=$(printf '%s' "$LIST_OUT" | grep -oF '"name":"omnifocus_' | wc -l | tr -d ' ')
-if [ "$TOOL_COUNT" -eq 84 ]; then
-  pass "exactly 84 tools returned (got $TOOL_COUNT)"
+if [ "$TOOL_COUNT" -eq 85 ]; then
+  pass "exactly 85 tools returned (got $TOOL_COUNT)"
 else
   fail "tool count" "expected 84, got $TOOL_COUNT"
 fi
@@ -173,7 +173,7 @@ for tool in \
   omnifocus_move_projects_batch omnifocus_reorder_task_tags \
   omnifocus_copy_tasks omnifocus_paste_tasks \
   omnifocus_next_repetition_date omnifocus_set_forecast_tag \
-  omnifocus_set_notification_repeat; do
+  omnifocus_set_notification_repeat omnifocus_reveal; do
   assert_contains "tool present: $tool" "$LIST_OUT" "\"$tool\""
 done
 
@@ -233,10 +233,10 @@ fi
 PAGED_LIST_LAST=$(rpc_paged '{"jsonrpc":"2.0","id":203,"method":"tools/list","params":{"cursor":"75"}}')
 assert_not_contains "last page omits nextCursor" "$PAGED_LIST_LAST" '"nextCursor"'
 LAST_COUNT=$(printf '%s' "$PAGED_LIST_LAST" | grep -oF '"name":"omnifocus_' | wc -l | tr -d ' ')
-if [ "$LAST_COUNT" -eq 9 ]; then
-  pass "last page returns remaining 9 tools (got $LAST_COUNT)"
+if [ "$LAST_COUNT" -eq 10 ]; then
+  pass "last page returns remaining 10 tools (got $LAST_COUNT)"
 else
-  fail "last page size" "expected 9, got $LAST_COUNT"
+  fail "last page size" "expected 10, got $LAST_COUNT"
 fi
 
 BAD_CURSOR_OUT=$(rpc_paged '{"jsonrpc":"2.0","id":204,"method":"tools/list","params":{"cursor":"bad"}}')
@@ -337,7 +337,7 @@ for tool in \
   omnifocus_move_projects_batch omnifocus_reorder_task_tags \
   omnifocus_copy_tasks omnifocus_paste_tasks \
   omnifocus_next_repetition_date omnifocus_set_forecast_tag \
-  omnifocus_set_notification_repeat; do
+  omnifocus_set_notification_repeat omnifocus_reveal; do
   dispatch_check "$tool"
 done
 
@@ -452,7 +452,7 @@ assert_contains "CLI help shows environment variables" "$CLI_HELP" "OF_BACKEND"
 
 # Count commands in help — each tool appears indented with 4 spaces then a lowercase letter
 CLI_CMD_COUNT=$(printf '%s' "$CLI_HELP" | grep -cE '^\s{4}[a-z]' || true)
-if [ "$CLI_CMD_COUNT" -eq 84 ]; then
+if [ "$CLI_CMD_COUNT" -eq 85 ]; then
   pass "CLI help lists exactly 84 commands (got $CLI_CMD_COUNT)"
 else
   fail "CLI help command count" "expected 84, got $CLI_CMD_COUNT"
@@ -538,7 +538,7 @@ for tool in \
   omnifocus_move_projects_batch omnifocus_reorder_task_tags \
   omnifocus_copy_tasks omnifocus_paste_tasks \
   omnifocus_next_repetition_date omnifocus_set_forecast_tag \
-  omnifocus_set_notification_repeat; do
+  omnifocus_set_notification_repeat omnifocus_reveal; do
   cmd=$(printf '%s' "$tool" | sed 's/^omnifocus_//' | tr '_' '-')
   cli_dispatch_check "$cmd"
 done
@@ -621,8 +621,15 @@ assert_contains "launchd integration uses bootstrap"    "$CLI_SOURCE" 'runLaunch
 assert_contains "launchd integration uses bootout"      "$CLI_SOURCE" 'runLaunchctl(["bootout", launchdServiceTarget()])'
 assert_contains "launchd integration targets gui/<uid>" "$CLI_SOURCE" '"gui/\(getuid())"'
 
-# ─── 18. prompts/list ─────────────────────────────────────────────────────────
-header "18. prompts/list"
+# ─── 18. Tag exclusivity and reveal tool schemas ────────────────────────────
+header "18. New tool schemas"
+
+assert_contains "create_tag has childrenAreMutuallyExclusive" "$LIST_OUT" 'childrenAreMutuallyExclusive'
+assert_contains "reveal tool present" "$LIST_OUT" '"omnifocus_reveal"'
+assert_contains "reveal tool has id param" "$LIST_OUT" '"omnifocus_reveal"'
+
+# ─── 19. prompts/list ─────────────────────────────────────────────────────────
+header "19. prompts/list"
 
 PROMPTS_LIST_OUT=$(rpc '{"jsonrpc":"2.0","id":70,"method":"prompts/list","params":{}}')
 assert_contains     "prompts/list returns result"    "$PROMPTS_LIST_OUT" '"result":'
@@ -637,8 +644,8 @@ PROMPT_COUNT=$(printf '%s' "$PROMPTS_LIST_OUT" | grep -oF '"name":"' | wc -l | t
 # 3 prompts + 1 argument = 4 "name" keys; but we only need to check the prompts
 # by verifying all three are present above.
 
-# ─── 19. prompts/get ──────────────────────────────────────────────────────────
-header "19. prompts/get"
+# ─── 20. prompts/get ──────────────────────────────────────────────────────────
+header "20. prompts/get"
 
 CAPTURE_PROMPT=$(rpc '{"jsonrpc":"2.0","id":71,"method":"prompts/get","params":{"name":"capture","arguments":{"task":"Buy groceries"}}}')
 assert_contains     "capture prompt returns messages"    "$CAPTURE_PROMPT" '"messages"'
@@ -663,8 +670,8 @@ assert_contains     "unknown prompt returns error"       "$UNKNOWN_PROMPT" '"err
 MISSING_PROMPT_NAME=$(rpc '{"jsonrpc":"2.0","id":76,"method":"prompts/get","params":{}}')
 assert_contains     "missing prompt name returns error"  "$MISSING_PROMPT_NAME" '"error":'
 
-# ─── 20. logging/setLevel ────────────────────────────────────────────────────
-header "20. logging/setLevel"
+# ─── 21. logging/setLevel ────────────────────────────────────────────────────
+header "21. logging/setLevel"
 
 LOG_SET=$(rpc '{"jsonrpc":"2.0","id":80,"method":"logging/setLevel","params":{"level":"debug"}}')
 assert_contains     "logging/setLevel returns result"    "$LOG_SET" '"result":'
@@ -676,8 +683,8 @@ assert_contains     "invalid log level returns error"    "$BAD_LEVEL" '"error":'
 MISSING_LEVEL=$(rpc '{"jsonrpc":"2.0","id":82,"method":"logging/setLevel","params":{}}')
 assert_contains     "missing log level returns error"    "$MISSING_LEVEL" '"error":'
 
-# ─── 21. initialize capabilities ─────────────────────────────────────────────
-header "21. initialize capabilities"
+# ─── 22. initialize capabilities ─────────────────────────────────────────────
+header "22. initialize capabilities"
 
 assert_contains     "capabilities includes prompts"      "$INIT_OUT" '"prompts"'
 assert_contains     "capabilities includes logging"      "$INIT_OUT" '"logging"'
@@ -688,8 +695,8 @@ SAMPLING_INIT=$(rpc '{"jsonrpc":"2.0","id":90,"method":"initialize","params":{"p
 assert_contains     "initialize with sampling accepted"  "$SAMPLING_INIT" '"result":'
 assert_not_contains "sampling init no error"             "$SAMPLING_INIT" '"error":'
 
-# ─── 22. logging notifications emitted on tool call ──────────────────────────
-header "22. logging notifications"
+# ─── 23. logging notifications emitted on tool call ──────────────────────────
+header "23. logging notifications"
 
 # Set level to debug, then call a tool — expect log notification lines
 LOG_TOOL_OUT=$(printf '%s\n%s\n' \

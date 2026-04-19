@@ -1,4 +1,4 @@
-// Tool definitions for all 84 OmniFocus MCP tools.
+// Tool definitions for all 85 OmniFocus MCP tools.
 
 nonisolated(unsafe) public let allTools: [ToolDefinition] = [
     ToolDefinition(
@@ -281,7 +281,8 @@ nonisolated(unsafe) public let allTools: [ToolDefinition] = [
             "type": "object",
             "properties": [
                 "name": ["type": "string"],
-                "active": ["type": "boolean"]
+                "active": ["type": "boolean"],
+                "childrenAreMutuallyExclusive": ["type": "boolean", "description": "If true, only one child tag can be assigned to a task at a time (v4.7+)"]
             ],
             "required": ["name"]
         ],
@@ -344,7 +345,8 @@ nonisolated(unsafe) public let allTools: [ToolDefinition] = [
                 "id": ["type": "string"],
                 "name": ["type": "string"],
                 "active": ["type": "boolean"],
-                "allowsNextAction": ["type": "boolean", "description": "Whether tasks with this tag are considered for next action"]
+                "allowsNextAction": ["type": "boolean", "description": "Whether tasks with this tag are considered for next action"],
+                "childrenAreMutuallyExclusive": ["type": "boolean", "description": "If true, only one child tag can be assigned to a task at a time (v4.7+)"]
             ],
             "required": ["id"]
         ],
@@ -1030,6 +1032,18 @@ nonisolated(unsafe) public let allTools: [ToolDefinition] = [
                 "repeatInterval": ["type": "number", "description": "Repeat interval in seconds (0 to disable)"]
             ],
             "required": ["id", "notificationId", "repeatInterval"]
+        ],
+        annotations: mutatingAnnotation
+    ),
+    ToolDefinition(
+        name: "omnifocus_reveal",
+        description: "Reveal and select an item in the OmniFocus UI. Opens the main window and navigates to the specified task, project, folder, or tag.",
+        inputSchema: [
+            "type": "object",
+            "properties": [
+                "id": ["type": "string", "description": "The id of the task, project, folder, or tag to reveal"]
+            ],
+            "required": ["id"]
         ],
         annotations: mutatingAnnotation
     )
