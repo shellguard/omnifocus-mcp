@@ -113,7 +113,7 @@ assert_not_contains "no error field"               "$INIT_OUT" '"error":'
 assert_contains     "protocolVersion 2025-11-25"   "$INIT_OUT" '"protocolVersion":"2025-11-25"'
 assert_contains     "capabilities field present"   "$INIT_OUT" '"capabilities":'
 assert_contains     "serverInfo name"              "$INIT_OUT" '"name":"omnifocus-mcp"'
-assert_contains     "serverInfo version is 0.3.1"  "$INIT_OUT" '"version":"0.3.1"'
+assert_contains     "serverInfo version is 0.3.2"  "$INIT_OUT" '"version":"0.3.2"'
 
 LEGACY_INIT_OUT=$(rpc '{"jsonrpc":"2.0","id":11,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"0"}}}')
 assert_contains "legacy protocol request accepted" "$LEGACY_INIT_OUT" '"protocolVersion":"2024-11-05"'
@@ -620,6 +620,85 @@ CLI_SOURCE=$(cat "$ROOT_DIR/Sources/omnifocus-cli/CLI.swift")
 assert_contains "launchd integration uses bootstrap"    "$CLI_SOURCE" 'runLaunchctl(["bootstrap", launchdDomainTarget(), launchdPlistPath])'
 assert_contains "launchd integration uses bootout"      "$CLI_SOURCE" 'runLaunchctl(["bootout", launchdServiceTarget()])'
 assert_contains "launchd integration targets gui/<uid>" "$CLI_SOURCE" '"gui/\(getuid())"'
+
+# ─── 18. prompts/list ─────────────────────────────────────────────────────────
+header "18. prompts/list"
+
+PROMPTS_LIST_OUT=$(rpc '{"jsonrpc":"2.0","id":70,"method":"prompts/list","params":{}}')
+assert_contains     "prompts/list returns result"    "$PROMPTS_LIST_OUT" '"result":'
+assert_contains     "prompts array present"          "$PROMPTS_LIST_OUT" '"prompts"'
+assert_contains     "capture prompt listed"          "$PROMPTS_LIST_OUT" '"name":"capture"'
+assert_contains     "forecast prompt listed"         "$PROMPTS_LIST_OUT" '"name":"forecast"'
+assert_contains     "review prompt listed"           "$PROMPTS_LIST_OUT" '"name":"review"'
+assert_contains     "capture has task argument"      "$PROMPTS_LIST_OUT" '"name":"task"'
+
+# Count prompts
+PROMPT_COUNT=$(printf '%s' "$PROMPTS_LIST_OUT" | grep -oF '"name":"' | wc -l | tr -d ' ')
+# 3 prompts + 1 argument = 4 "name" keys; but we only need to check the prompts
+# by verifying all three are present above.
+
+# ─── 19. prompts/get ──────────────────────────────────────────────────────────
+header "19. prompts/get"
+
+CAPTURE_PROMPT=$(rpc '{"jsonrpc":"2.0","id":71,"method":"prompts/get","params":{"name":"capture","arguments":{"task":"Buy groceries"}}}')
+assert_contains     "capture prompt returns messages"    "$CAPTURE_PROMPT" '"messages"'
+assert_contains     "capture prompt includes task text"  "$CAPTURE_PROMPT" 'Buy groceries'
+assert_contains     "capture prompt has user role"       "$CAPTURE_PROMPT" '"role":"user"'
+assert_contains     "capture prompt has text content"    "$CAPTURE_PROMPT" '"type":"text"'
+
+CAPTURE_NO_ARG=$(rpc '{"jsonrpc":"2.0","id":72,"method":"prompts/get","params":{"name":"capture"}}')
+assert_contains     "capture without arg asks user"      "$CAPTURE_NO_ARG" 'Ask the user'
+
+FORECAST_PROMPT=$(rpc '{"jsonrpc":"2.0","id":73,"method":"prompts/get","params":{"name":"forecast"}}')
+assert_contains     "forecast prompt returns messages"          "$FORECAST_PROMPT" '"messages"'
+assert_contains     "forecast mentions omnifocus_get_forecast"  "$FORECAST_PROMPT" 'omnifocus_get_forecast'
+
+REVIEW_PROMPT=$(rpc '{"jsonrpc":"2.0","id":74,"method":"prompts/get","params":{"name":"review"}}')
+assert_contains     "review prompt returns messages"            "$REVIEW_PROMPT" '"messages"'
+assert_contains     "review mentions omnifocus_list_inbox"      "$REVIEW_PROMPT" 'omnifocus_list_inbox'
+
+UNKNOWN_PROMPT=$(rpc '{"jsonrpc":"2.0","id":75,"method":"prompts/get","params":{"name":"nonexistent"}}')
+assert_contains     "unknown prompt returns error"       "$UNKNOWN_PROMPT" '"error":'
+
+MISSING_PROMPT_NAME=$(rpc '{"jsonrpc":"2.0","id":76,"method":"prompts/get","params":{}}')
+assert_contains     "missing prompt name returns error"  "$MISSING_PROMPT_NAME" '"error":'
+
+# ─── 20. logging/setLevel ────────────────────────────────────────────────────
+header "20. logging/setLevel"
+
+LOG_SET=$(rpc '{"jsonrpc":"2.0","id":80,"method":"logging/setLevel","params":{"level":"debug"}}')
+assert_contains     "logging/setLevel returns result"    "$LOG_SET" '"result":'
+assert_not_contains "logging/setLevel no error"          "$LOG_SET" '"error":'
+
+BAD_LEVEL=$(rpc '{"jsonrpc":"2.0","id":81,"method":"logging/setLevel","params":{"level":"banana"}}')
+assert_contains     "invalid log level returns error"    "$BAD_LEVEL" '"error":'
+
+MISSING_LEVEL=$(rpc '{"jsonrpc":"2.0","id":82,"method":"logging/setLevel","params":{}}')
+assert_contains     "missing log level returns error"    "$MISSING_LEVEL" '"error":'
+
+# ─── 21. initialize capabilities ─────────────────────────────────────────────
+header "21. initialize capabilities"
+
+assert_contains     "capabilities includes prompts"      "$INIT_OUT" '"prompts"'
+assert_contains     "capabilities includes logging"      "$INIT_OUT" '"logging"'
+assert_contains     "capabilities includes tools"        "$INIT_OUT" '"tools"'
+
+# Sampling: client advertises capability, server accepts it
+SAMPLING_INIT=$(rpc '{"jsonrpc":"2.0","id":90,"method":"initialize","params":{"protocolVersion":"2025-11-25","clientInfo":{"name":"test","version":"0"},"capabilities":{"sampling":{}}}}')
+assert_contains     "initialize with sampling accepted"  "$SAMPLING_INIT" '"result":'
+assert_not_contains "sampling init no error"             "$SAMPLING_INIT" '"error":'
+
+# ─── 22. logging notifications emitted on tool call ──────────────────────────
+header "22. logging notifications"
+
+# Set level to debug, then call a tool — expect log notification lines
+LOG_TOOL_OUT=$(printf '%s\n%s\n' \
+  '{"jsonrpc":"2.0","id":91,"method":"logging/setLevel","params":{"level":"debug"}}' \
+  '{"jsonrpc":"2.0","id":92,"method":"tools/call","params":{"name":"omnifocus_eval_automation","arguments":{}}}' \
+  | OF_BACKEND=jxa "$BINARY" 2>/dev/null)
+assert_contains     "log notification emitted"           "$LOG_TOOL_OUT" 'notifications'
+assert_contains     "log includes logger name"           "$LOG_TOOL_OUT" '"logger":"omnifocus-mcp"'
+assert_contains     "log includes tool name"             "$LOG_TOOL_OUT" 'omnifocus_eval_automation'
 
 # ─── Summary ─────────────────────────────────────────────────────────────────
 printf "\n${BOLD}Results: %d passed, %d failed${NC}\n" "$PASS" "$FAIL"

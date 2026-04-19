@@ -15,6 +15,26 @@ Current server behavior in `MCPServer.swift`:
   - request: `params.cursor`
   - response: `result.nextCursor`
 
+### Prompts
+
+- `prompts/list` returns three built-in prompts: `capture`, `forecast`, `review`
+- `prompts/get` returns prompt messages with `role: "user"` and `TextContent`
+- `capture` prompt accepts an optional `task` argument; omitting it produces a prompt that asks the user for input
+- Prompt content mirrors the cowork-plugin command definitions
+
+### Logging
+
+- `logging/setLevel` sets the minimum log level; valid levels: `debug`, `info`, `notice`, `warning`, `error`, `critical`, `alert`, `emergency`
+- Default level: `warning`
+- Log notifications sent via `notifications/message` with fields: `level`, `logger` (`"omnifocus-mcp"`), `data`
+- Tool calls emit `info`-level log on entry, `debug` on success, `error` on failure
+
+### Sampling
+
+- Server detects client sampling capability from `initialize` params (`capabilities.sampling`)
+- `createSamplingMessage` sends `sampling/createMessage` requests to the client and reads the response synchronously from stdin
+- 60-second timeout on sampling responses; other messages arriving during the wait are handled inline
+
 ## MCP Pagination Defaults
 
 - Page size default: `100`
