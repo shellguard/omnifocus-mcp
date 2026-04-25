@@ -21,7 +21,7 @@ The implementation uses Omni Automation where available, with JXA fallback.
 ### Homebrew (recommended)
 
 ```bash
-brew tap shellguard/omnifocus
+brew tap shellguard/tap
 brew install omnifocus-mcp
 ```
 
