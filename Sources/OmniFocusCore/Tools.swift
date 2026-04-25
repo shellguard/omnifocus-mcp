@@ -185,7 +185,7 @@ nonisolated(unsafe) public let allTools: [ToolDefinition] = [
     ),
     ToolDefinition(
         name: "omnifocus_eval_automation",
-        description: "Evaluate Omni Automation JavaScript inside OmniFocus. DANGER: executes arbitrary code with full read/write/delete access to ALL OmniFocus data. This is an unrestricted code execution tool — use only when no other tool can accomplish the task. Never pass untrusted or user-generated input as the script parameter. Destructive operations (delete, drop, remove) are blocked by default — pass allowDestructive: true to permit them.",
+        description: "Evaluate Omni Automation JavaScript inside OmniFocus. DANGER: executes arbitrary code with full read/write/delete access to ALL OmniFocus data. This is an unrestricted, fully privileged code execution tool — use only when no other tool can accomplish the task. Never pass untrusted or user-generated input as the script parameter. The allowDestructive flag enables a best-effort regex hint that catches common destructive patterns, but it is NOT a security boundary — determined scripts can bypass it via computed property names or aliases.",
         inputSchema: [
             "type": "object",
             "properties": [
@@ -263,6 +263,7 @@ nonisolated(unsafe) public let allTools: [ToolDefinition] = [
                 "note": ["type": "string"],
                 "due": ["type": "string", "description": "ISO 8601 date"],
                 "defer": ["type": "string", "description": "ISO 8601 date"],
+                "planned": ["type": "string", "description": "ISO 8601 planned date (v4.7+), or null to clear"],
                 "flagged": ["type": "boolean"],
                 "estimatedMinutes": ["type": "integer"],
                 "sequential": ["type": "boolean", "description": "Tasks must be completed in order"],
@@ -325,6 +326,7 @@ nonisolated(unsafe) public let allTools: [ToolDefinition] = [
                 "note": ["type": "string"],
                 "due": ["type": "string", "description": "ISO 8601 date"],
                 "defer": ["type": "string", "description": "ISO 8601 date"],
+                "planned": ["type": "string", "description": "ISO 8601 planned date (v4.7+), or null to clear"],
                 "flagged": ["type": "boolean"],
                 "estimatedMinutes": ["type": "integer"],
                 "sequential": ["type": "boolean", "description": "Tasks must be completed in order"],
@@ -516,7 +518,7 @@ nonisolated(unsafe) public let allTools: [ToolDefinition] = [
     ),
     ToolDefinition(
         name: "omnifocus_get_forecast",
-        description: "Get forecast view: overdue, today, flagged, and due this week task lists.",
+        description: "Get forecast view: overdue, today, flagged, due this week, planned today, planned soon, and forecast-tagged task lists.",
         inputSchema: ["type": "object", "properties": [String: Any]()],
         annotations: readOnlyAnnotation
     ),
@@ -655,7 +657,9 @@ nonisolated(unsafe) public let allTools: [ToolDefinition] = [
                 "rule": ["type": "string", "description": "iCal RRULE string, e.g. FREQ=WEEKLY;INTERVAL=1, or null to clear"],
                 "scheduleType": ["type": "string", "enum": ["due", "defer", "fixed"], "description": "How the repetition is scheduled"],
                 "anchorDateKey": ["type": "string", "enum": ["due", "defer", "planned"], "description": "v4.7+: which date anchors repetition"],
-                "catchUpAutomatically": ["type": "boolean", "description": "Whether missed repetitions should catch up"]
+                "catchUpAutomatically": ["type": "boolean", "description": "Whether missed repetitions should catch up"],
+                "endDate": ["type": "string", "description": "ISO 8601 date: stop repeating after this date (v4.7+)"],
+                "maxOccurrences": ["type": "integer", "description": "Maximum number of repetitions (v4.7+)"]
             ],
             "required": ["id", "rule"]
         ],
@@ -678,19 +682,6 @@ nonisolated(unsafe) public let allTools: [ToolDefinition] = [
             "type": "object",
             "properties": ["id": ["type": "string"]],
             "required": ["id"]
-        ],
-        annotations: mutatingAnnotation
-    ),
-    ToolDefinition(
-        name: "omnifocus_import_taskpaper",
-        description: "Import tasks from TaskPaper-formatted text into the inbox or a project.",
-        inputSchema: [
-            "type": "object",
-            "properties": [
-                "text": ["type": "string", "description": "TaskPaper-formatted text to import"],
-                "project": ["type": "string", "description": "Optional project name to import into"]
-            ],
-            "required": ["text"]
         ],
         annotations: mutatingAnnotation
     ),

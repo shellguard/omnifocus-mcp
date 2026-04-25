@@ -253,7 +253,6 @@ Dates use ISO 8601 strings.
 - `omnifocus_set_focus`
 - `omnifocus_set_forecast_tag`
 - `omnifocus_reorder_task_tags`
-- `omnifocus_import_taskpaper`
 
 ### UI interaction
 
@@ -305,3 +304,7 @@ If your binary is not at `/usr/local/bin/omnifocus-mcp`, update `cowork-plugin/.
 - If Omni Automation API is unavailable, set `OF_BACKEND=jxa`.
 - launchd agent path: `~/Library/LaunchAgents/com.omnifocus-cli.daemon.plist`.
 - launchd installs/uninstalls target the current user domain (`gui/<uid>`).
+- Prefer the `automation` backend (the default). Omni Automation provides access to features like Focus, URL lookup, and Forecast tags that are limited or unavailable in JXA.
+- `omnifocus_eval_automation` executes arbitrary JavaScript inside OmniFocus. The `allowDestructive` flag is a best-effort regex hint, not a security boundary. Never pass untrusted input as the script parameter.
+- Do not expose the CLI daemon socket over a network. Use stdio for MCP server integration.
+- OmniFocus 4.7+ enforces mutually exclusive tags. Tools return warnings when tags are rejected, but automation workflows should account for these constraints.

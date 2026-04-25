@@ -113,7 +113,7 @@ assert_not_contains "no error field"               "$INIT_OUT" '"error":'
 assert_contains     "protocolVersion 2025-11-25"   "$INIT_OUT" '"protocolVersion":"2025-11-25"'
 assert_contains     "capabilities field present"   "$INIT_OUT" '"capabilities":'
 assert_contains     "serverInfo name"              "$INIT_OUT" '"name":"omnifocus-mcp"'
-assert_contains     "serverInfo version is 0.4.1"  "$INIT_OUT" '"version":"0.4.1"'
+assert_contains     "serverInfo version is 0.5.0"  "$INIT_OUT" '"version":"0.5.0"'
 
 LEGACY_INIT_OUT=$(rpc '{"jsonrpc":"2.0","id":11,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"0"}}}')
 assert_contains "legacy protocol request accepted" "$LEGACY_INIT_OUT" '"protocolVersion":"2024-11-05"'
@@ -134,8 +134,8 @@ assert_not_contains "no error"         "$LIST_OUT" '"error":'
 # Count tool entries — count "name":"omnifocus_ occurrences inside "tools" list.
 # Each tool definition has exactly one name key starting with omnifocus_.
 TOOL_COUNT=$(printf '%s' "$LIST_OUT" | grep -oF '"name":"omnifocus_' | wc -l | tr -d ' ')
-if [ "$TOOL_COUNT" -eq 85 ]; then
-  pass "exactly 85 tools returned (got $TOOL_COUNT)"
+if [ "$TOOL_COUNT" -eq 84 ]; then
+  pass "exactly 84 tools returned (got $TOOL_COUNT)"
 else
   fail "tool count" "expected 84, got $TOOL_COUNT"
 fi
@@ -161,7 +161,7 @@ for tool in \
   omnifocus_create_tasks_batch omnifocus_delete_tasks_batch omnifocus_move_tasks_batch \
   omnifocus_list_notifications omnifocus_add_notification \
   omnifocus_remove_notification omnifocus_set_task_repetition \
-  omnifocus_mark_reviewed omnifocus_drop_task omnifocus_import_taskpaper \
+  omnifocus_mark_reviewed omnifocus_drop_task \
   omnifocus_add_relative_notification omnifocus_move_tag omnifocus_move_folder \
   omnifocus_convert_task_to_project omnifocus_duplicate_project \
   omnifocus_get_forecast_tag omnifocus_clean_up omnifocus_get_settings \
@@ -233,10 +233,10 @@ fi
 PAGED_LIST_LAST=$(rpc_paged '{"jsonrpc":"2.0","id":203,"method":"tools/list","params":{"cursor":"75"}}')
 assert_not_contains "last page omits nextCursor" "$PAGED_LIST_LAST" '"nextCursor"'
 LAST_COUNT=$(printf '%s' "$PAGED_LIST_LAST" | grep -oF '"name":"omnifocus_' | wc -l | tr -d ' ')
-if [ "$LAST_COUNT" -eq 10 ]; then
-  pass "last page returns remaining 10 tools (got $LAST_COUNT)"
+if [ "$LAST_COUNT" -eq 9 ]; then
+  pass "last page returns remaining 9 tools (got $LAST_COUNT)"
 else
-  fail "last page size" "expected 10, got $LAST_COUNT"
+  fail "last page size" "expected 9, got $LAST_COUNT"
 fi
 
 BAD_CURSOR_OUT=$(rpc_paged '{"jsonrpc":"2.0","id":204,"method":"tools/list","params":{"cursor":"bad"}}')
@@ -325,7 +325,7 @@ for tool in \
   omnifocus_create_tasks_batch omnifocus_delete_tasks_batch omnifocus_move_tasks_batch \
   omnifocus_list_notifications omnifocus_add_notification \
   omnifocus_remove_notification omnifocus_set_task_repetition \
-  omnifocus_mark_reviewed omnifocus_drop_task omnifocus_import_taskpaper \
+  omnifocus_mark_reviewed omnifocus_drop_task \
   omnifocus_add_relative_notification omnifocus_move_tag omnifocus_move_folder \
   omnifocus_convert_task_to_project omnifocus_duplicate_project \
   omnifocus_get_forecast_tag omnifocus_clean_up omnifocus_get_settings \
@@ -452,7 +452,7 @@ assert_contains "CLI help shows environment variables" "$CLI_HELP" "OF_BACKEND"
 
 # Count commands in help — each tool appears indented with 4 spaces then a lowercase letter
 CLI_CMD_COUNT=$(printf '%s' "$CLI_HELP" | grep -cE '^\s{4}[a-z]' || true)
-if [ "$CLI_CMD_COUNT" -eq 85 ]; then
+if [ "$CLI_CMD_COUNT" -eq 84 ]; then
   pass "CLI help lists exactly 84 commands (got $CLI_CMD_COUNT)"
 else
   fail "CLI help command count" "expected 84, got $CLI_CMD_COUNT"
@@ -526,7 +526,7 @@ for tool in \
   omnifocus_create_tasks_batch omnifocus_delete_tasks_batch omnifocus_move_tasks_batch \
   omnifocus_list_notifications omnifocus_add_notification \
   omnifocus_remove_notification omnifocus_set_task_repetition \
-  omnifocus_mark_reviewed omnifocus_drop_task omnifocus_import_taskpaper \
+  omnifocus_mark_reviewed omnifocus_drop_task \
   omnifocus_add_relative_notification omnifocus_move_tag omnifocus_move_folder \
   omnifocus_convert_task_to_project omnifocus_duplicate_project \
   omnifocus_get_forecast_tag omnifocus_clean_up omnifocus_get_settings \

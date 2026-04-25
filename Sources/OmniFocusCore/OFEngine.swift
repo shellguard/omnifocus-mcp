@@ -49,7 +49,7 @@ public final class OFEngine: @unchecked Sendable {
             if !allowDestructive {
                 if OFEngine.destructiveScriptRegex.firstMatch(in: script, options: [], range: NSRange(script.startIndex..., in: script)) != nil {
                     throw MCPError.invalidParams(
-                        "Script contains destructive operations. Use the dedicated MCP tools for delete/drop/move/complete operations, or pass allowDestructive: true to override this safety check."
+                        "Script matches common destructive patterns (delete/drop/remove/etc). Use the dedicated MCP tools for these operations, or pass allowDestructive: true to bypass this hint. Note: this check is a best-effort regex, not a security boundary."
                     )
                 }
             }

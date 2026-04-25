@@ -197,6 +197,8 @@
       effectiveCompletedDate: toISO(firstValue(task, ['effectiveCompletedDate'])),
       effectiveDropDate: toISO(firstValue(task, ['effectiveDropDate'])),
       shouldUseFloatingTimeZone: safeCall(task, 'shouldUseFloatingTimeZone'),
+      repetitionEndDate: toISO(firstValue(task, ['repetitionEndDate'])),
+      maxRepetitions: safeCall(task, 'maxRepetitions'),
       assignedContainer: (function() {
         try {
           var ac = firstValue(task, ['assignedContainer']);
@@ -246,6 +248,8 @@
       completionDate: toISO(firstValue(project, ['completionDate'])),
       dueDate: toISO(firstValue(project, ['dueDate'])),
       deferDate: toISO(firstValue(project, ['deferDate'])),
+      plannedDate: toISO(firstValue(project, ['plannedDate'])),
+      effectivePlannedDate: toISO(firstValue(project, ['effectivePlannedDate'])),
       flagged: safeCall(project, 'flagged'),
       sequential: safeCall(project, 'sequential'),
       containsSingletonActions: safeCall(project, 'containsSingletonActions'),
@@ -661,19 +665,35 @@
 
   function applyTags(task, tags) {
     if (!task) {
-      return;
+      return null;
     }
+    var requested = arrayify(tags);
     if (safeSet(task, 'tags', tags)) {
-      return;
+      // Verify: mutually exclusive tags may have been silently dropped (4.8.9+)
+      var actual = [];
+      try { actual = arrayify(firstValue(task, ['tags'])); } catch (e) {}
+      if (actual.length < requested.length) {
+        return 'Some tags were not applied (mutually exclusive tags may have been rejected). Requested: ' + requested.length + ', applied: ' + actual.length;
+      }
+      return null;
     }
     if (task && typeof task.addTag === 'function') {
+      var priorCount = 0;
+      try { priorCount = arrayify(firstValue(task, ['tags'])).length; } catch (e) {}
       arrayify(tags).forEach(function(tag) {
         try {
           task.addTag(tag);
         } catch (e) {
         }
       });
+      var actual2 = [];
+      try { actual2 = arrayify(firstValue(task, ['tags'])); } catch (e) {}
+      var newlyAdded = actual2.length - priorCount;
+      if (newlyAdded < requested.length) {
+        return 'Some tags were not applied (mutually exclusive tags may have been rejected). Requested: ' + requested.length + ', applied: ' + newlyAdded;
+      }
     }
+    return null;
   }
 
   function applyCommonTaskFields(task, params, doc) {
@@ -719,8 +739,10 @@
     }
     if (params.tags !== undefined) {
       var tagObjects = resolveTags(doc, params.tags, params.createMissingTags === true);
-      applyTags(task, tagObjects);
+      var tagWarning = applyTags(task, tagObjects);
+      if (tagWarning) { return [tagWarning]; }
     }
+    return [];
   }
 
   function assignTaskToProject(task, project) {
@@ -1134,11 +1156,13 @@
       }
     }
     var task = makeTask(doc, params, project);
-    applyCommonTaskFields(task, params, doc);
+    var warnings = applyCommonTaskFields(task, params, doc);
     if (project) {
       assignTaskToProject(task, project);
     }
-    return taskToJSON(task);
+    var result = taskToJSON(task);
+    if (warnings.length > 0) { result.warnings = warnings; }
+    return result;
   }
 
   function createProject(params) {
@@ -1165,7 +1189,7 @@
     if (!task) {
       throw new Error('Task not found');
     }
-    applyCommonTaskFields(task, params, doc);
+    var warnings = applyCommonTaskFields(task, params, doc);
     if (params.project !== undefined) {
       if (params.project) {
         var project = findProjectByName(doc, params.project);
@@ -1180,7 +1204,9 @@
         assignTaskToProject(task, null);
       }
     }
-    return taskToJSON(task);
+    var result = taskToJSON(task);
+    if (warnings.length > 0) { result.warnings = warnings; }
+    return result;
   }
 
   function setProjectSequential(params) {
@@ -1246,7 +1272,7 @@
         safeSet(task, 'deferDate', null);
       }
       if (tagObjects) {
-        applyTags(task, tagObjects);
+        var tagWarning = applyTags(task, tagObjects);
       }
       if (params.noteAppend) {
         appendNote(task, params.noteAppend);
@@ -1254,7 +1280,9 @@
       if (project && params.keepInInbox !== true) {
         assignTaskToProject(task, project);
       }
-      result.push(taskToJSON(task));
+      var taskJson = taskToJSON(task);
+      if (tagWarning) { taskJson.warnings = [tagWarning]; }
+      result.push(taskJson);
       if (limit && result.length >= limit) {
         break;
       }
@@ -1285,6 +1313,11 @@
     }
     if (params.defer === null) {
       safeSet(project, 'deferDate', null);
+    }
+    if (params.planned !== undefined) {
+      var pd = parseDate(params.planned);
+      if (pd) { safeSet(project, 'plannedDate', pd); }
+      if (params.planned === null) { safeSet(project, 'plannedDate', null); }
     }
     if (params.estimatedMinutes !== undefined) {
       safeSet(project, 'estimatedMinutes', params.estimatedMinutes);
@@ -1587,6 +1620,13 @@
     var todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
     var weekEnd = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
     var overdue = [], today = [], flagged = [], dueThisWeek = [];
+    var plannedToday = [], plannedSoon = [], forecastTagged = [];
+    var forecastTag = null;
+    try {
+      if (typeof Tag !== 'undefined' && Tag.forecastTag) {
+        forecastTag = Tag.forecastTag;
+      }
+    } catch (e) {}
     for (var i = 0; i < tasks.length; i++) {
       var task = tasks[i];
       if (!!safeCall(task, 'completed')) { continue; }
@@ -1601,8 +1641,29 @@
         }
       }
       if (!!safeCall(task, 'flagged')) { flagged.push(taskToJSON(task)); }
+      var plannedDate = dateValue(firstValue(task, ['plannedDate']));
+      if (plannedDate) {
+        if (plannedDate.getTime() <= todayEnd.getTime()) {
+          plannedToday.push(taskToJSON(task));
+        } else if (plannedDate.getTime() <= weekEnd.getTime()) {
+          plannedSoon.push(taskToJSON(task));
+        }
+      }
+      if (forecastTag) {
+        var forecastTagId = idValue(forecastTag);
+        if (forecastTagId) {
+          var taskTags = [];
+          try { taskTags = arrayify(firstValue(task, ['tags'])); } catch (e) {}
+          for (var ti = 0; ti < taskTags.length; ti++) {
+            if (idValue(taskTags[ti]) === forecastTagId) {
+              forecastTagged.push(taskToJSON(task));
+              break;
+            }
+          }
+        }
+      }
     }
-    return {overdue: overdue, today: today, flagged: flagged, dueThisWeek: dueThisWeek};
+    return {overdue: overdue, today: today, flagged: flagged, dueThisWeek: dueThisWeek, plannedToday: plannedToday, plannedSoon: plannedSoon, forecastTagged: forecastTagged};
   }
 
   function createSubtask(params) {
@@ -1617,8 +1678,10 @@
       try { task = parent.make({new: 'task', withProperties: {name: params.name}}); } catch (e) {}
     }
     if (!task) { throw new Error('Unable to create subtask'); }
-    applyCommonTaskFields(task, params, doc);
-    return taskToJSON(task);
+    var warnings = applyCommonTaskFields(task, params, doc);
+    var result = taskToJSON(task);
+    if (warnings.length > 0) { result.warnings = warnings; }
+    return result;
   }
 
   function duplicateTask(params) {
@@ -1805,6 +1868,18 @@
     if (params.catchUpAutomatically !== undefined) {
       safeSet(task, 'catchUpAutomatically', params.catchUpAutomatically);
     }
+    if (params.endDate !== undefined) {
+      var ed = parseDate(params.endDate);
+      if (ed) { safeSet(task, 'repetitionEndDate', ed); }
+      if (params.endDate === null) { safeSet(task, 'repetitionEndDate', null); }
+    }
+    if (params.maxOccurrences !== undefined) {
+      if (params.maxOccurrences === null) {
+        safeSet(task, 'maxRepetitions', null);
+      } else {
+        safeSet(task, 'maxRepetitions', params.maxOccurrences);
+      }
+    }
     return taskToJSON(task);
   }
 
@@ -1830,39 +1905,6 @@
       throw new Error('Unable to drop task — operation not supported in this OmniFocus version');
     }
     return taskToJSON(task);
-  }
-
-  function importTaskpaper(params) {
-    var doc = getDatabase();
-    var text = params.text;
-    if (!text) { throw new Error('Missing text parameter'); }
-    var target = null;
-    if (params.project) {
-      target = findProjectByName(doc, params.project);
-      if (!target) { throw new Error('Project not found'); }
-    }
-    var tasks = [];
-    try {
-      if (typeof Task !== 'undefined' && typeof Task.byParsingTransportText === 'function') {
-        var parsed = Task.byParsingTransportText(text, target || false);
-        tasks = arrayify(parsed).map(taskToJSON);
-      } else {
-        // Fallback: line-by-line
-        var lines = text.split('\n');
-        for (var i = 0; i < lines.length; i++) {
-          var line = lines[i].replace(/^[\s-]*/, '');
-          if (!line) { continue; }
-          var t = null;
-          if (typeof Task !== 'undefined') {
-            try { t = new Task(line, target || null); } catch (e) {}
-          }
-          if (t) { tasks.push(taskToJSON(t)); }
-        }
-      }
-    } catch (e) {
-      throw new Error('Unable to import TaskPaper text: ' + e.message);
-    }
-    return {imported: tasks.length, tasks: tasks};
   }
 
   function addRelativeNotification(params) {
@@ -1893,14 +1935,23 @@
       var parent = findTagByName(doc, params.parentTag);
       if (!parent) { throw new Error('Parent tag not found'); }
       try {
-        if (typeof moveTags === 'function') { moveTags([tag], parent); }
+        if (typeof moveTags === 'function') { moveTags([tag], parent.ending); }
         else { safeSet(tag, 'parent', parent); }
       } catch (e) { throw new Error('Unable to move tag: ' + e.message); }
     } else {
-      try {
-        if (typeof moveTags === 'function') { moveTags([tag], null); }
-        else { safeSet(tag, 'parent', null); }
-      } catch (e) { throw new Error('Unable to move tag to root: ' + e.message); }
+      var movedToRoot = false;
+      if (typeof moveTags === 'function') {
+        try {
+          var tagsRoot = firstValue(doc, ['tags']);
+          if (tagsRoot && tagsRoot.ending) {
+            moveTags([tag], tagsRoot.ending);
+            movedToRoot = true;
+          }
+        } catch (e) {}
+      }
+      if (!movedToRoot) {
+        safeSet(tag, 'parent', null);
+      }
     }
     return tagToJSON(tag);
   }
@@ -1913,14 +1964,23 @@
       var parent = findFolderByName(doc, params.parentFolder);
       if (!parent) { throw new Error('Parent folder not found'); }
       try {
-        if (typeof moveSections === 'function') { moveSections([folder], parent); }
+        if (typeof moveSections === 'function') { moveSections([folder], parent.ending); }
         else { safeSet(folder, 'parent', parent); }
       } catch (e) { throw new Error('Unable to move folder: ' + e.message); }
     } else {
-      try {
-        if (typeof moveSections === 'function') { moveSections([folder], null); }
-        else { safeSet(folder, 'parent', null); }
-      } catch (e) { throw new Error('Unable to move folder to root: ' + e.message); }
+      var movedToRoot = false;
+      if (typeof moveSections === 'function') {
+        try {
+          var lib = firstValue(doc, ['library', 'folders']);
+          if (lib && lib.ending) {
+            moveSections([folder], lib.ending);
+            movedToRoot = true;
+          }
+        } catch (e) {}
+      }
+      if (!movedToRoot) {
+        safeSet(folder, 'parent', null);
+      }
     }
     return folderToJSON(folder);
   }
@@ -2339,7 +2399,7 @@
     }
     try {
       if (targetFolder && typeof moveSections === 'function') {
-        moveSections(projects, targetFolder);
+        moveSections(projects, targetFolder.ending);
       } else if (targetFolder) {
         for (var j = 0; j < projects.length; j++) {
           safeSet(projects[j], 'parentFolder', targetFolder);
@@ -2398,7 +2458,13 @@
         throw new Error('Failed to reorder tags: unable to apply new tag list');
       }
     }
-    return taskToJSON(task);
+    var finalTags = [];
+    try { finalTags = arrayify(firstValue(task, ['tags'])); } catch (e) {}
+    var result = taskToJSON(task);
+    if (finalTags.length < newTags.length) {
+      result.warnings = ['Some tags were not applied after reorder (mutually exclusive tags may have been rejected). Requested: ' + newTags.length + ', applied: ' + finalTags.length];
+    }
+    return result;
   }
 
   function copyTasksAction(params) {
@@ -2685,9 +2751,6 @@
       break;
     case 'drop_task':
       result = dropTask(params);
-      break;
-    case 'import_taskpaper':
-      result = importTaskpaper(params);
       break;
     case 'add_relative_notification':
       result = addRelativeNotification(params);

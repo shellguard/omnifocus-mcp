@@ -115,6 +115,8 @@ function taskToJSON(task) {
     effectiveCompletedDate: toISO(firstValue(task, ['effectiveCompletedDate'])),
     effectiveDropDate: toISO(firstValue(task, ['effectiveDropDate'])),
     shouldUseFloatingTimeZone: safeCall(task, 'shouldUseFloatingTimeZone'),
+    repetitionEndDate: toISO(firstValue(task, ['repetitionEndDate'])),
+    maxRepetitions: safeCall(task, 'maxRepetitions'),
     assignedContainer: (function() {
       try {
         var ac = firstValue(task, ['assignedContainer']);
@@ -162,6 +164,8 @@ function projectToJSON(project) {
     completionDate: toISO(firstValue(project, ['completionDate'])),
     dueDate: toISO(firstValue(project, ['dueDate'])),
     deferDate: toISO(firstValue(project, ['deferDate'])),
+    plannedDate: toISO(firstValue(project, ['plannedDate'])),
+    effectivePlannedDate: toISO(firstValue(project, ['effectivePlannedDate'])),
     flagged: safeCall(project, 'flagged'),
     sequential: safeCall(project, 'parallel') !== null ? !safeCall(project, 'parallel') : null,
     containsSingletonActions: safeCall(project, 'containsSingletonActions'),
@@ -463,7 +467,14 @@ function applyCommonTaskFields(task, params, doc) {
   if (params.tags !== undefined) {
     var tagObjects = resolveTags(doc, params.tags, params.createMissingTags === true);
     task.tags = tagObjects;
+    // Verify: mutually exclusive tags may have been silently dropped (4.8.9+)
+    var actualTags = [];
+    try { actualTags = arrayify(task.tags()); } catch (e) { try { actualTags = arrayify(task.tags); } catch (e2) {} }
+    if (actualTags.length < tagObjects.length) {
+      return ['Some tags were not applied (mutually exclusive tags may have been rejected). Requested: ' + tagObjects.length + ', applied: ' + actualTags.length];
+    }
   }
+  return [];
 }
 
 function markTaskComplete(task, completionDate) {
@@ -762,39 +773,17 @@ function createTask(params) {
       throw new Error('Project not found');
     }
   }
-  var properties = {
-    name: params.name
-  };
-  if (params.note !== undefined) {
-    properties.note = params.note;
-  }
-  if (params.flagged !== undefined) {
-    properties.flagged = params.flagged;
-  }
-  if (params.estimatedMinutes !== undefined) {
-    properties.estimatedMinutes = params.estimatedMinutes;
-  }
-  var due = parseDate(params.due);
-  if (due) {
-    properties.dueDate = due;
-  }
-  var deferDate = parseDate(params.defer);
-  if (deferDate) {
-    properties.deferDate = deferDate;
-  }
-
+  var properties = { name: params.name };
   var task = null;
   if (project) {
     task = project.make({new: 'task', withProperties: properties});
   } else {
     task = doc.make({new: 'inbox task', withProperties: properties});
   }
-
-  if (params.tags !== undefined) {
-    var tagObjects = resolveTags(doc, params.tags, params.createMissingTags === true);
-    task.tags = tagObjects;
-  }
-  return taskToJSON(task);
+  var warnings = applyCommonTaskFields(task, params, doc);
+  var result = taskToJSON(task);
+  if (warnings.length > 0) { result.warnings = warnings; }
+  return result;
 }
 
 function createProject(params) {
@@ -843,7 +832,7 @@ function updateTask(params) {
   if (!task) {
     throw new Error('Task not found');
   }
-  applyCommonTaskFields(task, params, doc);
+  var warnings = applyCommonTaskFields(task, params, doc);
   if (params.project !== undefined) {
     var project = null;
     if (params.project) {
@@ -870,7 +859,9 @@ function updateTask(params) {
       }
     }
   }
-  return taskToJSON(task);
+  var result = taskToJSON(task);
+  if (warnings.length > 0) { result.warnings = warnings; }
+  return result;
 }
 
 function setProjectSequential(params) {
@@ -989,6 +980,11 @@ function applyCommonProjectFields(project, params) {
   }
   if (params.defer === null) {
     project.deferDate = null;
+  }
+  if (params.planned !== undefined) {
+    var pd = parseDate(params.planned);
+    if (pd) { safeSet(project, 'plannedDate', pd); }
+    if (params.planned === null) { safeSet(project, 'plannedDate', null); }
   }
   if (params.estimatedMinutes !== undefined) {
     safeSet(project, 'estimatedMinutes', params.estimatedMinutes);
@@ -1291,6 +1287,8 @@ function getForecast(params) {
   var todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
   var weekEnd = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
   var overdue = [], today = [], flagged = [], dueThisWeek = [];
+  var plannedToday = [], plannedSoon = [], forecastTagged = [];
+  // JXA does not support Tag.forecastTag, so forecastTagged stays empty
   for (var i = 0; i < tasks.length; i++) {
     var task = tasks[i];
     if (!!safeCall(task, 'completed')) { continue; }
@@ -1305,8 +1303,16 @@ function getForecast(params) {
       }
     }
     if (!!safeCall(task, 'flagged')) { flagged.push(taskToJSON(task)); }
+    var plannedDate = dateValue(firstValue(task, ['plannedDate']));
+    if (plannedDate) {
+      if (plannedDate.getTime() <= todayEnd.getTime()) {
+        plannedToday.push(taskToJSON(task));
+      } else if (plannedDate.getTime() <= weekEnd.getTime()) {
+        plannedSoon.push(taskToJSON(task));
+      }
+    }
   }
-  return {overdue: overdue, today: today, flagged: flagged, dueThisWeek: dueThisWeek};
+  return {overdue: overdue, today: today, flagged: flagged, dueThisWeek: dueThisWeek, plannedToday: plannedToday, plannedSoon: plannedSoon, forecastTagged: forecastTagged};
 }
 
 function createSubtask(params) {
@@ -1496,6 +1502,18 @@ function setTaskRepetition(params) {
   if (params.catchUpAutomatically !== undefined) {
     safeSet(task, 'catchUpAutomatically', params.catchUpAutomatically);
   }
+  if (params.endDate !== undefined) {
+    var ed = parseDate(params.endDate);
+    if (ed) { safeSet(task, 'repetitionEndDate', ed); }
+    if (params.endDate === null) { safeSet(task, 'repetitionEndDate', null); }
+  }
+  if (params.maxOccurrences !== undefined) {
+    if (params.maxOccurrences === null) {
+      safeSet(task, 'maxRepetitions', null);
+    } else {
+      safeSet(task, 'maxRepetitions', params.maxOccurrences);
+    }
+  }
   return taskToJSON(task);
 }
 
@@ -1532,43 +1550,6 @@ function dropTask(params) {
   }
   if (!dropped) { throw new Error('Unable to drop task — operation not supported in this OmniFocus version'); }
   return taskToJSON(task);
-}
-
-function importTaskpaper(params) {
-  var doc = getDocument();
-  var text = params.text;
-  if (!text) { throw new Error('Missing text parameter'); }
-  var target = null;
-  if (params.project) {
-    target = findProjectByName(doc, params.project);
-    if (!target) { throw new Error('Project not found'); }
-  }
-  // JXA: line-by-line fallback — TaskPaper metadata (@tags, @due, indentation) is NOT preserved
-  var tasks = [];
-  var moveFailures = 0;
-  try {
-    var lines = text.split('\n');
-    for (var i = 0; i < lines.length; i++) {
-      var line = lines[i].replace(/^[\s-]*/, '');
-      if (!line) { continue; }
-      var taskObj = doc.make({new: 'inboxTask', withProperties: {name: line}});
-      if (target) {
-        var moved = false;
-        try { target.tasks.push(taskObj); moved = true; } catch (e) {
-          try { taskObj.project = target; moved = true; } catch (e2) {}
-        }
-        if (!moved) { moveFailures++; }
-      }
-      tasks.push(taskToJSON(taskObj));
-    }
-  } catch (e) {
-    throw new Error('Unable to import TaskPaper text: ' + e.message);
-  }
-  var result = {imported: tasks.length, tasks: tasks, warning: 'JXA backend: TaskPaper metadata (tags, dates, hierarchy) was stripped. Only task names were imported. Use OmniAutomation backend for full TaskPaper support.'};
-  if (moveFailures > 0) {
-    result.warning += ' ' + moveFailures + ' task(s) could not be moved to the target project.';
-  }
-  return result;
 }
 
 function addRelativeNotification(params) {
@@ -1902,7 +1883,13 @@ function reorderTaskTags(params) {
     try { task.tags = origTags; } catch (e2) {}
     throw new Error('Failed to reorder tags: ' + e.message);
   }
-  return taskToJSON(task);
+  var finalTags = [];
+  try { finalTags = arrayify(task.tags()); } catch (e) { try { finalTags = arrayify(task.tags); } catch (e2) {} }
+  var result = taskToJSON(task);
+  if (finalTags.length < newTags.length) {
+    result.warnings = ['Some tags were not applied after reorder (mutually exclusive tags may have been rejected). Requested: ' + newTags.length + ', applied: ' + finalTags.length];
+  }
+  return result;
 }
 
 function copyTasksAction(params) {
@@ -2137,9 +2124,6 @@ switch (action) {
     break;
   case 'drop_task':
     result = dropTask(params);
-    break;
-  case 'import_taskpaper':
-    result = importTaskpaper(params);
     break;
   case 'add_relative_notification':
     result = addRelativeNotification(params);

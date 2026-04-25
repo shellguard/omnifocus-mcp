@@ -15,7 +15,7 @@ final class MCPServer {
     let stdin = FileHandle.standardInput
 
     let maxBufferSize = 10 * 1024 * 1024 // 10 MB
-    let serverVersion = "0.4.1"
+    let serverVersion = "0.5.0"
     let supportedProtocolVersions = ["2025-11-25", "2025-06-18", "2024-11-05"]
     let defaultToolsPageSize = 100
 
