@@ -134,10 +134,10 @@ assert_not_contains "no error"         "$LIST_OUT" '"error":'
 # Count tool entries — count "name":"omnifocus_ occurrences inside "tools" list.
 # Each tool definition has exactly one name key starting with omnifocus_.
 TOOL_COUNT=$(printf '%s' "$LIST_OUT" | grep -oF '"name":"omnifocus_' | wc -l | tr -d ' ')
-if [ "$TOOL_COUNT" -eq 84 ]; then
-  pass "exactly 84 tools returned (got $TOOL_COUNT)"
+if [ "$TOOL_COUNT" -eq 85 ]; then
+  pass "exactly 85 tools returned (got $TOOL_COUNT)"
 else
-  fail "tool count" "expected 84, got $TOOL_COUNT"
+  fail "tool count" "expected 85, got $TOOL_COUNT"
 fi
 
 # Verify ALL 84 tool names are present
@@ -156,7 +156,7 @@ for tool in \
   omnifocus_uncomplete_task omnifocus_uncomplete_project \
   omnifocus_append_to_note omnifocus_search_tags omnifocus_set_project_status \
   omnifocus_get_folder omnifocus_update_folder omnifocus_delete_folder \
-  omnifocus_get_task_counts omnifocus_get_project_counts omnifocus_get_forecast \
+  omnifocus_get_task_counts omnifocus_get_project_counts omnifocus_list_stalled_projects omnifocus_get_forecast \
   omnifocus_create_subtask omnifocus_duplicate_task \
   omnifocus_create_tasks_batch omnifocus_delete_tasks_batch omnifocus_move_tasks_batch \
   omnifocus_list_notifications omnifocus_add_notification \
@@ -198,10 +198,10 @@ assert_contains "idempotentHint present"       "$LIST_OUT" '"idempotentHint"'
 # Count annotation categories
 RO_COUNT=$(printf '%s' "$LIST_OUT" | grep -oF '"readOnlyHint":true' | wc -l | tr -d ' ')
 DE_COUNT=$(printf '%s' "$LIST_OUT" | grep -oF '"destructiveHint":true' | wc -l | tr -d ' ')
-if [ "$RO_COUNT" -eq 32 ]; then
-  pass "32 read-only tools annotated (got $RO_COUNT)"
+if [ "$RO_COUNT" -eq 33 ]; then
+  pass "33 read-only tools annotated (got $RO_COUNT)"
 else
-  fail "read-only annotation count" "expected 32, got $RO_COUNT"
+  fail "read-only annotation count" "expected 33, got $RO_COUNT"
 fi
 if [ "$DE_COUNT" -eq 8 ]; then
   pass "8 destructive tools annotated (got $DE_COUNT)"
@@ -233,10 +233,10 @@ fi
 PAGED_LIST_LAST=$(rpc_paged '{"jsonrpc":"2.0","id":203,"method":"tools/list","params":{"cursor":"75"}}')
 assert_not_contains "last page omits nextCursor" "$PAGED_LIST_LAST" '"nextCursor"'
 LAST_COUNT=$(printf '%s' "$PAGED_LIST_LAST" | grep -oF '"name":"omnifocus_' | wc -l | tr -d ' ')
-if [ "$LAST_COUNT" -eq 9 ]; then
-  pass "last page returns remaining 9 tools (got $LAST_COUNT)"
+if [ "$LAST_COUNT" -eq 10 ]; then
+  pass "last page returns remaining 10 tools (got $LAST_COUNT)"
 else
-  fail "last page size" "expected 9, got $LAST_COUNT"
+  fail "last page size" "expected 10, got $LAST_COUNT"
 fi
 
 BAD_CURSOR_OUT=$(rpc_paged '{"jsonrpc":"2.0","id":204,"method":"tools/list","params":{"cursor":"bad"}}')
@@ -320,7 +320,7 @@ for tool in \
   omnifocus_uncomplete_task omnifocus_uncomplete_project \
   omnifocus_append_to_note omnifocus_search_tags omnifocus_set_project_status \
   omnifocus_get_folder omnifocus_update_folder omnifocus_delete_folder \
-  omnifocus_get_task_counts omnifocus_get_project_counts omnifocus_get_forecast \
+  omnifocus_get_task_counts omnifocus_get_project_counts omnifocus_list_stalled_projects omnifocus_get_forecast \
   omnifocus_create_subtask omnifocus_duplicate_task \
   omnifocus_create_tasks_batch omnifocus_delete_tasks_batch omnifocus_move_tasks_batch \
   omnifocus_list_notifications omnifocus_add_notification \
@@ -452,10 +452,10 @@ assert_contains "CLI help shows environment variables" "$CLI_HELP" "OF_BACKEND"
 
 # Count commands in help — each tool appears indented with 4 spaces then a lowercase letter
 CLI_CMD_COUNT=$(printf '%s' "$CLI_HELP" | grep -cE '^\s{4}[a-z]' || true)
-if [ "$CLI_CMD_COUNT" -eq 84 ]; then
-  pass "CLI help lists exactly 84 commands (got $CLI_CMD_COUNT)"
+if [ "$CLI_CMD_COUNT" -eq 85 ]; then
+  pass "CLI help lists exactly 85 commands (got $CLI_CMD_COUNT)"
 else
-  fail "CLI help command count" "expected 84, got $CLI_CMD_COUNT"
+  fail "CLI help command count" "expected 85, got $CLI_CMD_COUNT"
 fi
 
 # ─── 12. CLI: per-command --help ─────────────────────────────────────────────
@@ -521,7 +521,7 @@ for tool in \
   omnifocus_uncomplete_task omnifocus_uncomplete_project \
   omnifocus_append_to_note omnifocus_search_tags omnifocus_set_project_status \
   omnifocus_get_folder omnifocus_update_folder omnifocus_delete_folder \
-  omnifocus_get_task_counts omnifocus_get_project_counts omnifocus_get_forecast \
+  omnifocus_get_task_counts omnifocus_get_project_counts omnifocus_list_stalled_projects omnifocus_get_forecast \
   omnifocus_create_subtask omnifocus_duplicate_task \
   omnifocus_create_tasks_batch omnifocus_delete_tasks_batch omnifocus_move_tasks_batch \
   omnifocus_list_notifications omnifocus_add_notification \

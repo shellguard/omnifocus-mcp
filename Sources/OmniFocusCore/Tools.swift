@@ -517,6 +517,12 @@ nonisolated(unsafe) public let allTools: [ToolDefinition] = [
         annotations: readOnlyAnnotation
     ),
     ToolDefinition(
+        name: "omnifocus_list_stalled_projects",
+        description: "List active projects with no available next action. These are GTD 'stalled' projects that need attention during review.",
+        inputSchema: ["type": "object", "properties": [String: Any]()],
+        annotations: readOnlyAnnotation
+    ),
+    ToolDefinition(
         name: "omnifocus_get_forecast",
         description: "Get forecast view: overdue, today, flagged, due this week, planned today, planned soon, and forecast-tagged task lists.",
         inputSchema: ["type": "object", "properties": [String: Any]()],

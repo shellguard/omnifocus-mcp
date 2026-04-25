@@ -1280,6 +1280,27 @@ function getProjectCounts(params) {
   return {total: total, active: active, on_hold: onHold, dropped: dropped, stalled: stalled};
 }
 
+function listStalledProjects(params) {
+  var doc = getDocument();
+  var projects = arrayify(firstValue(doc, ['flattenedProjects', 'projects']));
+  var result = [];
+  for (var i = 0; i < projects.length; i++) {
+    var project = projects[i];
+    var status = normalizeStatus(String(firstValue(project, ['status', 'projectStatus']) || ''));
+    if (status !== 'active') { continue; }
+    var ptasks = arrayify(firstValue(project, ['tasks', 'flattenedTasks']));
+    var hasAvailable = false;
+    for (var j = 0; j < ptasks.length; j++) {
+      if (!safeCall(ptasks[j], 'completed') && isTaskAvailable(ptasks[j])) {
+        hasAvailable = true;
+        break;
+      }
+    }
+    if (!hasAvailable) { result.push(projectToJSON(project)); }
+  }
+  return result;
+}
+
 function getForecast(params) {
   var doc = getDocument();
   var tasks = arrayify(firstValue(doc, ['flattenedTasks', 'tasks']));
@@ -2088,6 +2109,9 @@ switch (action) {
     break;
   case 'get_project_counts':
     result = getProjectCounts(params);
+    break;
+  case 'list_stalled_projects':
+    result = listStalledProjects(params);
     break;
   case 'get_forecast':
     result = getForecast(params);
