@@ -2,7 +2,7 @@ class OmnifocusMcp < Formula
   desc "MCP server and CLI for OmniFocus on macOS"
   homepage "https://github.com/shellguard/omnifocus-mcp"
   url "https://github.com/shellguard/omnifocus-mcp/releases/download/v0.5.0/omnifocus-mcp-0.5.0-macos-universal.tar.gz"
-  sha256 "7626a175c86525befde3d0c5fae3fb5fc9caf064507ecca77d35cc6e37bd4552"
+  sha256 "76d67dbca7849b7178565558950930deb398fcf08960fd533674720669939616"
   license "MIT"
   version "0.5.0"
 
