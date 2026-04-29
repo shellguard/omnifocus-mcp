@@ -245,6 +245,61 @@ BAD_CURSOR_OUT=$(rpc_paged '{"jsonrpc":"2.0","id":204,"method":"tools/list","par
 assert_contains "invalid cursor returns error" "$BAD_CURSOR_OUT" '"error":'
 assert_contains "invalid cursor uses code -32602" "$BAD_CURSOR_OUT" '-32602'
 
+# ─── 3c. Tool/backend action parity ──────────────────────────────────────────
+header "3c. tool/backend action parity"
+
+PARITY_OUT=$(python3 - "$ROOT_DIR" <<'PY'
+import pathlib
+import re
+import sys
+
+root = pathlib.Path(sys.argv[1])
+tools_swift = (root / "Sources/OmniFocusCore/Tools.swift").read_text()
+engine_swift = (root / "Sources/OmniFocusCore/OFEngine.swift").read_text()
+
+tool_names = re.findall(r'name:\s*"([^"]+)"', tools_swift)
+tool_names = [name for name in tool_names if name.startswith("omnifocus_")]
+
+alias_pairs = re.findall(
+    r'"(omnifocus_[^"]+)"\s*:\s*"([^"]+)"',
+    engine_swift,
+)
+aliases = dict(alias_pairs)
+
+expected = []
+for name in tool_names:
+    if name == "omnifocus_eval_automation":
+        continue
+    expected.append(aliases.get(name, name.removeprefix("omnifocus_")))
+
+failures = []
+for rel in [
+    "Sources/OmniFocusCore/Resources/omni_automation.js",
+    "Sources/OmniFocusCore/Resources/jxa.js",
+]:
+    text = (root / rel).read_text()
+    cases = set(re.findall(r"case '([^']+)':", text))
+    missing = sorted(set(expected) - cases)
+    extra = sorted(cases - set(expected))
+    if missing or extra:
+        if missing:
+            failures.append(f"{rel}: missing {', '.join(missing)}")
+        if extra:
+            failures.append(f"{rel}: extra {', '.join(extra)}")
+
+if failures:
+    print("\n".join(failures))
+    sys.exit(1)
+
+print(f"ok: {len(tool_names)} tools, {len(expected)} backend actions")
+PY
+)
+if [ $? -eq 0 ]; then
+  pass "tool definitions match both backend action switches ($PARITY_OUT)"
+else
+  fail "tool/backend action parity" "$PARITY_OUT"
+fi
+
 # ─── 4. tools/call error handling ─────────────────────────────────────────────
 header "4. tools/call error handling"
 
