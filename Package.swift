@@ -3,6 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "omnifocus-mcp",
+    platforms: [.macOS(.v14)],
     targets: [
         .target(
             name: "OmniFocusCore",
@@ -18,6 +19,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "omnifocus-cli",
+            dependencies: ["OmniFocusCore"]
+        ),
+        .testTarget(
+            name: "OmniFocusCoreTests",
             dependencies: ["OmniFocusCore"]
         ),
     ]
