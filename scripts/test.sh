@@ -113,7 +113,7 @@ assert_not_contains "no error field"               "$INIT_OUT" '"error":'
 assert_contains     "protocolVersion 2025-11-25"   "$INIT_OUT" '"protocolVersion":"2025-11-25"'
 assert_contains     "capabilities field present"   "$INIT_OUT" '"capabilities":'
 assert_contains     "serverInfo name"              "$INIT_OUT" '"name":"omnifocus-mcp"'
-assert_contains     "serverInfo version is 0.6.0"  "$INIT_OUT" '"version":"0.6.0"'
+assert_contains     "serverInfo version is 0.7.0"  "$INIT_OUT" '"version":"0.7.0"'
 
 LEGACY_INIT_OUT=$(rpc '{"jsonrpc":"2.0","id":11,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"0"}}}')
 assert_contains "legacy protocol request accepted" "$LEGACY_INIT_OUT" '"protocolVersion":"2024-11-05"'

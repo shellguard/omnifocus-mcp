@@ -16,8 +16,16 @@ private let signalShutdownHandler: @convention(c) (Int32) -> Void = { _ in
     _exit(0)
 }
 
+struct OutputOptions {
+    var compact = false
+    var ndjson = false
+    var quiet = false
+}
+
 @main
 struct OmniFocusCLI {
+    nonisolated(unsafe) static var cachedStdin: String?
+
     static func main() {
         let args = Array(CommandLine.arguments.dropFirst())
 
@@ -54,30 +62,44 @@ struct OmniFocusCLI {
             exit(1)
         }
 
-        let flagArgs = Array(args.dropFirst())
+        var flagArgs = Array(args.dropFirst())
 
         if flagArgs.contains("--help") || flagArgs.contains("-h") {
             printCommandHelp(tool)
             return
         }
 
-        let arguments: [String: Any]
+        // Strip global output flags (--compact / --ndjson / --quiet) and
+        // global input flag (--args-json). What remains is per-tool flags.
+        let outputOpts = extractOutputFlags(&flagArgs)
+        let preset: [String: Any]
+        do {
+            preset = try extractArgsJson(&flagArgs)
+        } catch {
+            fputs("Error: \(error.localizedDescription)\n", stderr)
+            exit(1)
+        }
+
+        var arguments: [String: Any]
         do {
             arguments = try parseArguments(flagArgs, schema: tool.inputSchema)
         } catch {
             fputs("Error: \(error.localizedDescription)\n", stderr)
             exit(1)
         }
+        // Explicit flags take precedence over --args-json values
+        for (k, v) in preset where arguments[k] == nil {
+            arguments[k] = v
+        }
 
         // Try daemon first, fall back to direct execution
-        if let result = sendToDaemon(toolName: toolName, arguments: arguments) {
-            print(result)
+        if let raw = sendToDaemonRaw(toolName: toolName, arguments: arguments) {
+            emit(raw, options: outputOpts)
         } else {
             let engine = OFEngine()
             do {
                 let result = try engine.callTool(named: toolName, arguments: arguments)
-                let output = formatOutput(result)
-                print(output)
+                emit(result, options: outputOpts)
             } catch {
                 fputs("Error: \(error)\n", stderr)
                 exit(1)
@@ -280,6 +302,62 @@ struct OmniFocusCLI {
     }
 
     // MARK: - Socket client
+
+    /// Send a tool call through the daemon socket. Returns the raw result
+    /// (the inner serialized JSON string the engine produced) so the caller
+    /// can format it however it wants. Returns nil if no daemon is reachable.
+    static func sendToDaemonRaw(toolName: String, arguments: [String: Any]) -> Any? {
+        guard FileManager.default.fileExists(atPath: socketPath) else { return nil }
+
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+
+        guard var addr = socketAddress(for: socketPath, reportErrors: false) else { return nil }
+
+        let connectResult = withUnsafePointer(to: &addr) { ptr in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
+                connect(fd, sockPtr, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        guard connectResult == 0 else { return nil }
+
+        setRecvTimeout(fd, seconds: 60)
+
+        var request: [String: Any] = ["command": toolName]
+        if !arguments.isEmpty { request["arguments"] = arguments }
+        guard let data = try? JSONSerialization.data(withJSONObject: request, options: []),
+              var payload = String(data: data, encoding: .utf8) else { return nil }
+        payload += "\n"
+        let sent = payload.withCString { send(fd, $0, payload.utf8.count, 0) }
+        guard sent > 0 else { return nil }
+
+        var buffer = Data()
+        var byte: UInt8 = 0
+        while recv(fd, &byte, 1, 0) == 1 {
+            if byte == 0x0A { break }
+            buffer.append(byte)
+            if buffer.count > 10_485_760 { return nil }
+        }
+
+        guard !buffer.isEmpty,
+              let response = try? JSONSerialization.jsonObject(with: buffer, options: []) as? [String: Any] else {
+            return nil
+        }
+
+        guard response["ok"] as? Bool == true else {
+            let errMsg = response["error"] as? String ?? "Unknown daemon error"
+            fputs("Error: \(errMsg)\n", stderr)
+            exit(1)
+        }
+
+        // The daemon wraps the engine result as { "data": "<json string>" }.
+        // Unwrap and return the inner string so the formatter can re-parse it.
+        if let result = response["result"] as? [String: Any], let dataStr = result["data"] {
+            return dataStr
+        }
+        return response["result"]
+    }
 
     static func sendToDaemon(toolName: String, arguments: [String: Any]) -> String? {
         guard FileManager.default.fileExists(atPath: socketPath) else { return nil }
@@ -519,6 +597,73 @@ struct OmniFocusCLI {
 
     // MARK: - Argument parsing
 
+    /// Strip global output flags from the arg list and return what was set.
+    static func extractOutputFlags(_ args: inout [String]) -> OutputOptions {
+        var opts = OutputOptions()
+        var kept: [String] = []
+        kept.reserveCapacity(args.count)
+        for arg in args {
+            switch arg {
+            case "--compact": opts.compact = true
+            case "--ndjson":  opts.ndjson = true
+            case "--quiet", "-q": opts.quiet = true
+            default: kept.append(arg)
+            }
+        }
+        args = kept
+        return opts
+    }
+
+    /// Strip and parse `--args-json <value>` from the arg list. Value may be
+    /// a JSON string, `@file`, or `-` (stdin). Returns an empty dict if absent.
+    static func extractArgsJson(_ args: inout [String]) throws -> [String: Any] {
+        var i = 0
+        var result: [String: Any] = [:]
+        var kept: [String] = []
+        kept.reserveCapacity(args.count)
+        while i < args.count {
+            if args[i] == "--args-json" {
+                guard i + 1 < args.count else {
+                    throw CLIError.missingValue("--args-json")
+                }
+                let raw = try resolveValue(args[i + 1], flag: "--args-json")
+                guard let data = raw.data(using: .utf8),
+                      let obj = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] else {
+                    throw CLIError.invalidValue("--args-json", raw, "JSON object")
+                }
+                result.merge(obj, uniquingKeysWith: { _, new in new })
+                i += 2
+            } else {
+                kept.append(args[i])
+                i += 1
+            }
+        }
+        args = kept
+        return result
+    }
+
+    /// Resolve a flag value: literal string by default; if it begins with `@`,
+    /// read the named file; if it is exactly `-`, read stdin (cached so multiple
+    /// flags can share the same buffer).
+    static func resolveValue(_ raw: String, flag: String) throws -> String {
+        if raw == "-" {
+            if let cached = cachedStdin { return cached }
+            let data = FileHandle.standardInput.readDataToEndOfFile()
+            let text = String(data: data, encoding: .utf8) ?? ""
+            cachedStdin = text
+            return text
+        }
+        if raw.hasPrefix("@") {
+            let path = String(raw.dropFirst())
+            do {
+                return try String(contentsOfFile: path, encoding: .utf8)
+            } catch {
+                throw CLIError.invalidValue(flag, raw, "readable file path (\(error.localizedDescription))")
+            }
+        }
+        return raw
+    }
+
     static func parseArguments(_ args: [String], schema: [String: Any]) throws -> [String: Any] {
         let properties = schema["properties"] as? [String: Any] ?? [:]
         var result = [String: Any]()
@@ -537,59 +682,118 @@ struct OmniFocusCLI {
 
             let propDict = propSchema as? [String: Any] ?? [:]
             let type = propDict["type"] as? String ?? "string"
+            let finalKey = camelKey.isEmpty ? key : camelKey
 
             switch type {
             case "boolean":
                 if i + 1 < args.count && !args[i + 1].hasPrefix("--") {
                     let val = args[i + 1].lowercased()
                     if val == "true" || val == "false" {
-                        result[camelKey.isEmpty ? key : camelKey] = val == "true"
+                        result[finalKey] = val == "true"
                         i += 2
                         continue
                     }
                 }
-                result[camelKey.isEmpty ? key : camelKey] = true
+                result[finalKey] = true
                 i += 1
             case "integer":
                 guard i + 1 < args.count else {
                     throw CLIError.missingValue(arg)
                 }
-                guard let intVal = Int(args[i + 1]) else {
-                    throw CLIError.invalidValue(arg, args[i + 1], "integer")
+                let raw = try resolveValue(args[i + 1], flag: arg).trimmingCharacters(in: .whitespacesAndNewlines)
+                guard let intVal = Int(raw) else {
+                    throw CLIError.invalidValue(arg, raw, "integer")
                 }
-                result[camelKey.isEmpty ? key : camelKey] = intVal
+                result[finalKey] = intVal
                 i += 2
             case "array":
                 guard i + 1 < args.count else {
                     throw CLIError.missingValue(arg)
                 }
-                let rawValue = args[i + 1]
-                let values = rawValue.contains(",") ? rawValue.split(separator: ",").map(String.init) : [rawValue]
-                let finalKey = camelKey.isEmpty ? key : camelKey
-                var existing = result[finalKey] as? [String] ?? []
-                existing.append(contentsOf: values)
+                let raw = try resolveValue(args[i + 1], flag: arg)
+                let parsed = try parseArrayValue(raw, flag: arg, itemSchema: propDict["items"] as? [String: Any])
+                var existing = result[finalKey] as? [Any] ?? []
+                existing.append(contentsOf: parsed)
                 result[finalKey] = existing
                 i += 2
             case "object":
                 guard i + 1 < args.count else {
                     throw CLIError.missingValue(arg)
                 }
-                let jsonStr = args[i + 1]
-                guard let data = jsonStr.data(using: .utf8),
+                let raw = try resolveValue(args[i + 1], flag: arg)
+                guard let data = raw.data(using: .utf8),
                       let obj = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] else {
-                    throw CLIError.invalidValue(arg, jsonStr, "JSON object")
+                    throw CLIError.invalidValue(arg, raw, "JSON object")
                 }
-                result[camelKey.isEmpty ? key : camelKey] = obj
+                result[finalKey] = obj
                 i += 2
             default: // string
                 guard i + 1 < args.count else {
                     throw CLIError.missingValue(arg)
                 }
-                result[camelKey.isEmpty ? key : camelKey] = args[i + 1]
+                let raw = args[i + 1]
+                // For string flags, only resolve @file/- if explicitly used.
+                let resolved = try resolveValue(raw, flag: arg)
+                // Trim a trailing newline that's almost always unwanted from
+                // file/stdin reads. Argv values are unaffected (no newline).
+                if raw == "-" || raw.hasPrefix("@") {
+                    result[finalKey] = resolved.trimmingCharacters(in: .newlines)
+                } else {
+                    result[finalKey] = resolved
+                }
                 i += 2
             }
         }
         return result
+    }
+
+    /// Parse an array flag value. Accepts:
+    /// - JSON array (any leading whitespace then `[`)
+    /// - JSON Lines (multiple lines, each parses as JSON, used when items are objects or auto-detected)
+    /// - One value per line (line-format, common when piped from `jq -r`)
+    /// - Comma-separated (single-line, no JSON markers — argv ergonomics)
+    static func parseArrayValue(_ raw: String, flag: String, itemSchema: [String: Any]?) throws -> [Any] {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return [] }
+
+        // JSON array literal
+        if trimmed.first == "[" {
+            guard let data = trimmed.data(using: .utf8),
+                  let arr = try? JSONSerialization.jsonObject(with: data, options: []) as? [Any] else {
+                throw CLIError.invalidValue(flag, raw, "JSON array")
+            }
+            return arr
+        }
+
+        // Multi-line content: NDJSON or line-format
+        if raw.contains("\n") {
+            let lines = raw.split(whereSeparator: { $0.isNewline })
+                .map { String($0).trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty && !$0.hasPrefix("#") }
+            // If items look like JSON objects/arrays/quoted strings, parse each as JSON.
+            let looksJSON = lines.first.map { line in
+                ["{", "[", "\""].contains(where: { line.hasPrefix($0) })
+            } ?? false
+            let itemType = (itemSchema?["type"] as? String) ?? "string"
+            if looksJSON || itemType == "object" {
+                var out: [Any] = []
+                for line in lines {
+                    guard let data = line.data(using: .utf8),
+                          let obj = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) else {
+                        throw CLIError.invalidValue(flag, line, "JSON value (one per line)")
+                    }
+                    out.append(obj)
+                }
+                return out
+            }
+            return lines.map { $0 as Any }
+        }
+
+        // Single-line: comma-separated for argv ergonomics
+        if trimmed.contains(",") {
+            return trimmed.split(separator: ",").map { String($0) as Any }
+        }
+        return [trimmed as Any]
     }
 
     // MARK: - Formatting
@@ -600,6 +804,68 @@ struct OmniFocusCLI {
         return String(parts[0]) + parts.dropFirst().map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined()
     }
 
+    /// Print a tool's result using the requested OutputOptions.
+    /// Accepts either a Swift value (from direct callTool) or a pre-serialized
+    /// JSON string (from the daemon path).
+    static func emit(_ value: Any, options: OutputOptions) {
+        if options.quiet { return }
+
+        // Normalise to a Swift value so we can format consistently.
+        let normalised: Any = {
+            if let str = value as? String,
+               let data = str.data(using: .utf8),
+               let parsed = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) {
+                return parsed
+            }
+            return value
+        }()
+
+        if options.ndjson {
+            if let arr = normalised as? [Any] {
+                for item in arr {
+                    if let line = compactJSON(item) { print(line) }
+                }
+            } else if let line = compactJSON(normalised) {
+                print(line)
+            }
+            return
+        }
+
+        if options.compact {
+            if let line = compactJSON(normalised) { print(line); return }
+        }
+
+        // Default: pretty-printed JSON with sorted keys (existing behavior).
+        print(prettyJSON(normalised))
+    }
+
+    private static func compactJSON(_ value: Any) -> String? {
+        if JSONSerialization.isValidJSONObject(value),
+           let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]),
+           let s = String(data: data, encoding: .utf8) {
+            return s
+        }
+        // Fragments (string/number/bool/null) — JSONSerialization only accepts
+        // top-level array/object, so wrap, encode, then unwrap.
+        if let data = try? JSONSerialization.data(withJSONObject: [value], options: []),
+           let arrText = String(data: data, encoding: .utf8) {
+            // strip leading [ and trailing ]
+            return String(arrText.dropFirst().dropLast())
+        }
+        return nil
+    }
+
+    private static func prettyJSON(_ value: Any) -> String {
+        if JSONSerialization.isValidJSONObject(value),
+           let data = try? JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys]),
+           let s = String(data: data, encoding: .utf8) {
+            return s
+        }
+        if let str = value as? String { return str }
+        return "\(value)"
+    }
+
+    /// Legacy helper retained for daemon paths that still expect a single string.
     static func formatOutput(_ value: Any) -> String {
         if let str = value as? String {
             if let data = str.data(using: .utf8),
@@ -622,6 +888,22 @@ struct OmniFocusCLI {
 
     static func printUsage() {
         print("Usage: omnifocus-cli <command> [--key value ...]")
+        print("")
+        print("Output flags (any command):")
+        print("  --compact                      Single-line JSON output")
+        print("  --ndjson                       One JSON object per line (for list results)")
+        print("  --quiet, -q                    Suppress stdout; rely on exit code")
+        print("")
+        print("Input conventions (any flag):")
+        print("  --foo @path                    Read flag value from file")
+        print("  --foo -                        Read flag value from stdin")
+        print("  --args-json '{...}'|@file|-    Set the entire arguments object as JSON")
+        print("")
+        print("Pipelines:")
+        print("  omnifocus-cli list-untagged --ndjson | jq -r .id \\")
+        print("    | omnifocus-cli update-tasks-batch --updates -")
+        print("  omnifocus-cli list-overdue --compact | jq '.[].name'")
+        print("  echo '{\"name\":\"Buy milk\"}' | omnifocus-cli create-task --args-json -")
         print("")
         print("Commands:")
 
@@ -717,6 +999,10 @@ struct OmniFocusCLI {
             let reqTag = isRequired ? " (required)" : ""
             print("    \(pad(flag, to: 32)) \(type)\(reqTag)  \(desc)")
         }
+
+        print("")
+        print("  Any flag accepts '@path' to load the value from a file, or '-' to read stdin.")
+        print("  Add --compact, --ndjson, or --quiet to control output format.")
     }
 
     static func commandName(for tool: ToolDefinition) -> String {
