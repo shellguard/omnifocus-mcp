@@ -8,14 +8,24 @@ description: >
 
 When the user wants to understand their current workload or task situation:
 
-1. Start with `omnifocus_get_forecast` to get overdue, today, flagged, and due-this-week tasks in one call.
-2. Use `omnifocus_get_task_counts` to give a quick numeric summary if helpful.
-3. If they ask about a specific project, use `omnifocus_list_tasks` filtered by project.
-4. If they ask about a specific tag or area, filter by tag.
+1. Start with `omnifocus_get_forecast` — it returns seven lists in one call: `overdue`, `today`, `flagged`, `dueThisWeek`, `plannedToday`, `plannedSoon`, and `forecastTagged` (tasks carrying the user's Forecast tag).
+2. Use `omnifocus_get_task_counts` for a numeric summary if helpful.
+3. If they ask about a specific project or tag, use `omnifocus_list_tasks` filtered by `project` or `tag`.
 
-Present the information clearly:
-- Lead with anything overdue (these need attention first).
-- Then today's tasks.
-- Then flagged items not yet due today.
-- Keep the summary concise — don't list every field of every task unless asked.
-- Offer to help prioritise, reschedule, or take action on specific items.
+Present the information so each task only appears once. Order:
+
+- Lead with **Overdue**.
+- Then **Due today**.
+- Then **Planned today** (intended-work-date today — OmniFocus 4.7+ semantics).
+- Then **Forecast-tagged** tasks not already listed.
+- Then **Flagged** tasks not already listed.
+- Then **Due this week** and **Planned soon** as a forward look.
+
+Keep entries to one line. Don't list every field unless asked. Offer to help reschedule, plan, or take action on specific items.
+
+**Date semantics** (don't conflate them):
+- `due` — real deadline. Use sparingly.
+- `planned` — intended work date. Use for "I'd like to do this on X".
+- `defer` — hide until X.
+
+If the user describes intent ("I'd like to work on this Friday"), prefer `planned` over `due`.

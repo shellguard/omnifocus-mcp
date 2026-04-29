@@ -1043,6 +1043,82 @@ nonisolated(unsafe) public let allTools: [ToolDefinition] = [
             "required": ["id"]
         ],
         annotations: mutatingAnnotation
+    ),
+    ToolDefinition(
+        name: "omnifocus_update_tasks_batch",
+        description: "Update multiple tasks in one call. Accepts per-task field updates including due/defer/planned dates (pass null to clear), tags, project, name, note, flagged, estimatedMinutes. Replaces dedicated reschedule/plan/defer/clear-dates batch tools.",
+        inputSchema: [
+            "type": "object",
+            "properties": [
+                "updates": [
+                    "type": "array",
+                    "description": "Array of per-task updates. Each item must include id; other fields are applied like omnifocus_update_task.",
+                    "items": [
+                        "type": "object",
+                        "properties": [
+                            "id": ["type": "string"],
+                            "name": ["type": "string"],
+                            "note": ["type": "string"],
+                            "project": ["type": "string"],
+                            "tags": ["type": "array", "items": ["type": "string"]],
+                            "due": ["type": "string", "description": "ISO 8601 date, or null to clear"],
+                            "defer": ["type": "string", "description": "ISO 8601 date, or null to clear"],
+                            "planned": ["type": "string", "description": "ISO 8601 planned date (v4.7+), or null to clear"],
+                            "flagged": ["type": "boolean"],
+                            "estimatedMinutes": ["type": "integer"],
+                            "shouldUseFloatingTimeZone": ["type": "boolean"],
+                            "createMissingTags": ["type": "boolean"],
+                            "createMissingProject": ["type": "boolean"]
+                        ],
+                        "required": ["id"]
+                    ]
+                ]
+            ],
+            "required": ["updates"]
+        ],
+        annotations: mutatingAnnotation
+    ),
+    ToolDefinition(
+        name: "omnifocus_list_review_due",
+        description: "List active projects whose nextReviewDate is on or before now (or before an optional cutoff). Use during a weekly review to find projects needing attention.",
+        inputSchema: [
+            "type": "object",
+            "properties": [
+                "before": ["type": "string", "description": "ISO 8601 cutoff date (default: now). Projects with nextReviewDate <= this date are returned."]
+            ]
+        ],
+        annotations: readOnlyAnnotation
+    ),
+    ToolDefinition(
+        name: "omnifocus_list_untagged",
+        description: "List tasks with no tags. By default returns only available (incomplete, not deferred) tasks; pass status=all to include completed.",
+        inputSchema: [
+            "type": "object",
+            "properties": [
+                "status": ["type": "string", "enum": ["all", "available", "completed"]],
+                "limit": ["type": "integer", "minimum": 1]
+            ]
+        ],
+        annotations: readOnlyAnnotation
+    ),
+    ToolDefinition(
+        name: "omnifocus_doctor",
+        description: "Diagnose the OmniFocus integration: which backend is in use (Omni Automation vs JXA), whether the OmniFocus app is reachable, app version, and notes about required macOS Automation permissions.",
+        inputSchema: ["type": "object", "properties": [String: Any]()],
+        annotations: readOnlyAnnotation
+    ),
+    ToolDefinition(
+        name: "omnifocus_get_next_actions",
+        description: "Return the GTD next action for each active project: one task per project, respecting sequential ordering and project-level deferral. Recurses into action groups using each group's own sequential setting. Skips single-action lists by default (they are buckets, not projects with a 'next'). Returns [{project, task}, ...]. Ignores projects that are on hold, dropped, completed, or deferred to the future.",
+        inputSchema: [
+            "type": "object",
+            "properties": [
+                "tag": ["type": "string", "description": "Only include next actions whose tags contain this name"],
+                "includeSingletons": ["type": "boolean", "description": "Include single-action lists (default false)"],
+                "limit": ["type": "integer", "minimum": 1]
+            ]
+        ],
+        annotations: readOnlyAnnotation
     )
 ]
 

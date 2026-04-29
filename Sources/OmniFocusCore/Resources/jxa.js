@@ -1301,6 +1301,134 @@ function listStalledProjects(params) {
   return result;
 }
 
+function listReviewDue(params) {
+  var doc = getDocument();
+  var projects = arrayify(firstValue(doc, ['flattenedProjects', 'projects']));
+  var cutoff = parseDate(params.before) || new Date();
+  var result = [];
+  for (var i = 0; i < projects.length; i++) {
+    var project = projects[i];
+    var status = normalizeStatus(String(firstValue(project, ['status', 'projectStatus']) || ''));
+    if (status !== 'active') { continue; }
+    var nextReview = dateValue(firstValue(project, ['nextReviewDate']));
+    if (!nextReview) { continue; }
+    if (nextReview <= cutoff) { result.push(projectToJSON(project)); }
+  }
+  return result;
+}
+
+function listUntagged(params) {
+  var doc = getDocument();
+  var tasks = arrayify(firstValue(doc, ['flattenedTasks', 'tasks']));
+  var status = params.status || 'available';
+  var limit = params.limit || null;
+  var result = [];
+  for (var i = 0; i < tasks.length; i++) {
+    var task = tasks[i];
+    var completed = !!safeCall(task, 'completed');
+    if (status === 'completed' && !completed) { continue; }
+    if (status === 'available' && completed) { continue; }
+    if (status === 'available' && !isTaskAvailable(task)) { continue; }
+    var names = tagNames(task);
+    if (names.length > 0) { continue; }
+    result.push(taskToJSON(task));
+    if (limit && result.length >= limit) { break; }
+  }
+  return result;
+}
+
+function doctor(params) {
+  var report = {
+    backend: 'jxa',
+    omniFocusReachable: false,
+    omniFocusVersion: null,
+    notes: [
+      'Running via osascript JXA. The Omni Automation backend offers fuller fidelity; if it is not selected, OmniFocus may not have plugin scripting available or the OF_BACKEND env var is forcing JXA.',
+      'Required macOS settings: System Settings → Privacy & Security → Automation must allow this app to control OmniFocus.',
+      'In OmniFocus: Settings → General → enable "Automation: Accept Scripts From External Applications" for richer features.'
+    ]
+  };
+  try {
+    var of = getApp();
+    report.omniFocusReachable = !!of;
+    try { report.omniFocusVersion = String(safeCall(of, 'version') || ''); } catch (e) {}
+  } catch (e) {
+    report.notes.push('OmniFocus app not reachable: ' + (e.message || String(e)));
+  }
+  return report;
+}
+
+function pickNextActionForProject(project) {
+  function pickFromContainer(container, sequential) {
+    var children = arrayify(firstValue(container, ['tasks']));
+    for (var i = 0; i < children.length; i++) {
+      var child = children[i];
+      if (safeCall(child, 'completed') || safeCall(child, 'dropped')) { continue; }
+      if (!isTaskAvailable(child)) {
+        if (sequential) { return null; }
+        continue;
+      }
+      if (safeCall(child, 'hasChildren')) {
+        var nested = pickFromContainer(child, safeCall(child, 'sequential') === true);
+        if (nested) { return nested; }
+        if (sequential) { return null; }
+        continue;
+      }
+      return child;
+    }
+    return null;
+  }
+  return pickFromContainer(project, safeCall(project, 'sequential') === true);
+}
+
+function getNextActions(params) {
+  var doc = getDocument();
+  var projects = arrayify(firstValue(doc, ['flattenedProjects', 'projects']));
+  var tagFilter = params.tag || null;
+  var includeSingletons = params.includeSingletons === true;
+  var limit = params.limit || null;
+  var now = new Date();
+  var result = [];
+  for (var i = 0; i < projects.length; i++) {
+    var project = projects[i];
+    var status = normalizeStatus(String(firstValue(project, ['status', 'projectStatus']) || ''));
+    if (status !== 'active') { continue; }
+    if (!includeSingletons && safeCall(project, 'containsSingletonActions')) { continue; }
+    var pdefer = dateValue(firstValue(project, ['effectiveDeferDate', 'deferDate']));
+    if (pdefer && pdefer > now) { continue; }
+    var task = pickNextActionForProject(project);
+    if (!task) { continue; }
+    if (tagFilter) {
+      var names = tagNames(task);
+      if (names.indexOf(tagFilter) === -1) { continue; }
+    }
+    result.push({project: projectToJSON(project), task: taskToJSON(task)});
+    if (limit && result.length >= limit) { break; }
+  }
+  return result;
+}
+
+function updateTasksBatch(params) {
+  var updates = params.updates || [];
+  var tasks = [];
+  var errors = [];
+  for (var i = 0; i < updates.length; i++) {
+    var u = updates[i];
+    if (!u || !u.id) {
+      errors.push({index: i, error: 'Missing id'});
+      continue;
+    }
+    try {
+      tasks.push(updateTask(u));
+    } catch (e) {
+      errors.push({id: u.id, error: e.message || String(e)});
+    }
+  }
+  var out = {updated: tasks.length, tasks: tasks};
+  if (errors.length > 0) { out.errors = errors; }
+  return out;
+}
+
 function getForecast(params) {
   var doc = getDocument();
   var tasks = arrayify(firstValue(doc, ['flattenedTasks', 'tasks']));
@@ -2112,6 +2240,21 @@ switch (action) {
     break;
   case 'list_stalled_projects':
     result = listStalledProjects(params);
+    break;
+  case 'list_review_due':
+    result = listReviewDue(params);
+    break;
+  case 'list_untagged':
+    result = listUntagged(params);
+    break;
+  case 'doctor':
+    result = doctor(params);
+    break;
+  case 'update_tasks_batch':
+    result = updateTasksBatch(params);
+    break;
+  case 'get_next_actions':
+    result = getNextActions(params);
     break;
   case 'get_forecast':
     result = getForecast(params);

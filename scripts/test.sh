@@ -113,7 +113,7 @@ assert_not_contains "no error field"               "$INIT_OUT" '"error":'
 assert_contains     "protocolVersion 2025-11-25"   "$INIT_OUT" '"protocolVersion":"2025-11-25"'
 assert_contains     "capabilities field present"   "$INIT_OUT" '"capabilities":'
 assert_contains     "serverInfo name"              "$INIT_OUT" '"name":"omnifocus-mcp"'
-assert_contains     "serverInfo version is 0.5.0"  "$INIT_OUT" '"version":"0.5.0"'
+assert_contains     "serverInfo version is 0.6.0"  "$INIT_OUT" '"version":"0.6.0"'
 
 LEGACY_INIT_OUT=$(rpc '{"jsonrpc":"2.0","id":11,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"0"}}}')
 assert_contains "legacy protocol request accepted" "$LEGACY_INIT_OUT" '"protocolVersion":"2024-11-05"'
@@ -134,13 +134,13 @@ assert_not_contains "no error"         "$LIST_OUT" '"error":'
 # Count tool entries — count "name":"omnifocus_ occurrences inside "tools" list.
 # Each tool definition has exactly one name key starting with omnifocus_.
 TOOL_COUNT=$(printf '%s' "$LIST_OUT" | grep -oF '"name":"omnifocus_' | wc -l | tr -d ' ')
-if [ "$TOOL_COUNT" -eq 85 ]; then
-  pass "exactly 85 tools returned (got $TOOL_COUNT)"
+if [ "$TOOL_COUNT" -eq 90 ]; then
+  pass "exactly 90 tools returned (got $TOOL_COUNT)"
 else
-  fail "tool count" "expected 85, got $TOOL_COUNT"
+  fail "tool count" "expected 90, got $TOOL_COUNT"
 fi
 
-# Verify ALL 84 tool names are present
+# Verify ALL tool names are present
 for tool in \
   omnifocus_list_tasks omnifocus_list_inbox omnifocus_list_projects \
   omnifocus_list_tags omnifocus_list_perspectives omnifocus_list_folders \
@@ -173,7 +173,9 @@ for tool in \
   omnifocus_move_projects_batch omnifocus_reorder_task_tags \
   omnifocus_copy_tasks omnifocus_paste_tasks \
   omnifocus_next_repetition_date omnifocus_set_forecast_tag \
-  omnifocus_set_notification_repeat omnifocus_reveal; do
+  omnifocus_set_notification_repeat omnifocus_reveal \
+  omnifocus_update_tasks_batch omnifocus_list_review_due \
+  omnifocus_list_untagged omnifocus_doctor omnifocus_get_next_actions; do
   assert_contains "tool present: $tool" "$LIST_OUT" "\"$tool\""
 done
 
@@ -198,10 +200,10 @@ assert_contains "idempotentHint present"       "$LIST_OUT" '"idempotentHint"'
 # Count annotation categories
 RO_COUNT=$(printf '%s' "$LIST_OUT" | grep -oF '"readOnlyHint":true' | wc -l | tr -d ' ')
 DE_COUNT=$(printf '%s' "$LIST_OUT" | grep -oF '"destructiveHint":true' | wc -l | tr -d ' ')
-if [ "$RO_COUNT" -eq 33 ]; then
-  pass "33 read-only tools annotated (got $RO_COUNT)"
+if [ "$RO_COUNT" -eq 37 ]; then
+  pass "37 read-only tools annotated (got $RO_COUNT)"
 else
-  fail "read-only annotation count" "expected 33, got $RO_COUNT"
+  fail "read-only annotation count" "expected 37, got $RO_COUNT"
 fi
 if [ "$DE_COUNT" -eq 8 ]; then
   pass "8 destructive tools annotated (got $DE_COUNT)"
@@ -233,10 +235,10 @@ fi
 PAGED_LIST_LAST=$(rpc_paged '{"jsonrpc":"2.0","id":203,"method":"tools/list","params":{"cursor":"75"}}')
 assert_not_contains "last page omits nextCursor" "$PAGED_LIST_LAST" '"nextCursor"'
 LAST_COUNT=$(printf '%s' "$PAGED_LIST_LAST" | grep -oF '"name":"omnifocus_' | wc -l | tr -d ' ')
-if [ "$LAST_COUNT" -eq 10 ]; then
-  pass "last page returns remaining 10 tools (got $LAST_COUNT)"
+if [ "$LAST_COUNT" -eq 15 ]; then
+  pass "last page returns remaining 15 tools (got $LAST_COUNT)"
 else
-  fail "last page size" "expected 10, got $LAST_COUNT"
+  fail "last page size" "expected 15, got $LAST_COUNT"
 fi
 
 BAD_CURSOR_OUT=$(rpc_paged '{"jsonrpc":"2.0","id":204,"method":"tools/list","params":{"cursor":"bad"}}')
@@ -337,7 +339,9 @@ for tool in \
   omnifocus_move_projects_batch omnifocus_reorder_task_tags \
   omnifocus_copy_tasks omnifocus_paste_tasks \
   omnifocus_next_repetition_date omnifocus_set_forecast_tag \
-  omnifocus_set_notification_repeat omnifocus_reveal; do
+  omnifocus_set_notification_repeat omnifocus_reveal \
+  omnifocus_update_tasks_batch omnifocus_list_review_due \
+  omnifocus_list_untagged omnifocus_doctor omnifocus_get_next_actions; do
   dispatch_check "$tool"
 done
 
@@ -452,10 +456,10 @@ assert_contains "CLI help shows environment variables" "$CLI_HELP" "OF_BACKEND"
 
 # Count commands in help — each tool appears indented with 4 spaces then a lowercase letter
 CLI_CMD_COUNT=$(printf '%s' "$CLI_HELP" | grep -cE '^\s{4}[a-z]' || true)
-if [ "$CLI_CMD_COUNT" -eq 85 ]; then
-  pass "CLI help lists exactly 85 commands (got $CLI_CMD_COUNT)"
+if [ "$CLI_CMD_COUNT" -eq 90 ]; then
+  pass "CLI help lists exactly 90 commands (got $CLI_CMD_COUNT)"
 else
-  fail "CLI help command count" "expected 85, got $CLI_CMD_COUNT"
+  fail "CLI help command count" "expected 90, got $CLI_CMD_COUNT"
 fi
 
 # ─── 12. CLI: per-command --help ─────────────────────────────────────────────
@@ -538,7 +542,9 @@ for tool in \
   omnifocus_move_projects_batch omnifocus_reorder_task_tags \
   omnifocus_copy_tasks omnifocus_paste_tasks \
   omnifocus_next_repetition_date omnifocus_set_forecast_tag \
-  omnifocus_set_notification_repeat omnifocus_reveal; do
+  omnifocus_set_notification_repeat omnifocus_reveal \
+  omnifocus_update_tasks_batch omnifocus_list_review_due \
+  omnifocus_list_untagged omnifocus_doctor omnifocus_get_next_actions; do
   cmd=$(printf '%s' "$tool" | sed 's/^omnifocus_//' | tr '_' '-')
   cli_dispatch_check "$cmd"
 done

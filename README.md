@@ -143,7 +143,7 @@ Package output: `./dist/`
 
 ## Tool Catalog
 
-Current MCP catalog: **85 tools**.
+Current MCP catalog: **90 tools**.
 
 Source of truth:
 
@@ -171,6 +171,10 @@ Dates use ISO 8601 strings.
 - `omnifocus_get_folder`
 - `omnifocus_get_task_counts`
 - `omnifocus_get_project_counts`
+- `omnifocus_list_stalled_projects`
+- `omnifocus_list_review_due`
+- `omnifocus_list_untagged`
+- `omnifocus_get_next_actions`
 - `omnifocus_get_forecast`
 - `omnifocus_get_forecast_tag`
 - `omnifocus_get_forecast_days`
@@ -230,6 +234,7 @@ Dates use ISO 8601 strings.
 ### Batch operations
 
 - `omnifocus_create_tasks_batch`
+- `omnifocus_update_tasks_batch`
 - `omnifocus_delete_tasks_batch`
 - `omnifocus_move_tasks_batch`
 - `omnifocus_duplicate_tasks_batch`
@@ -264,6 +269,7 @@ Dates use ISO 8601 strings.
 - `omnifocus_redo`
 - `omnifocus_save`
 - `omnifocus_clean_up`
+- `omnifocus_doctor`
 - `omnifocus_eval_automation`
 
 ## Claude Cowork Plugin
@@ -275,6 +281,14 @@ Included skills:
 - `capture-tasks`
 - `check-workload`
 - `manage-projects`
+- `inbox-processing`
+- `weekly-review`
+- `date-semantics`
+- `focus-session`
+- `project-scaffold`
+- `tag-strategy`
+- `routines`
+- `system-cleanup`
 
 Included commands:
 
