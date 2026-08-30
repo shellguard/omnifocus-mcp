@@ -14,5 +14,7 @@
 ## Notes
 
 - Tool names are `omnifocus_*`.
-- Input schema and annotations are emitted by `tools/list`.
-- Catalog is paginated via `cursor` / `nextCursor`.
+- Catalog size: **90 tools**.
+- `tools/list` emits `name`, `title`, `description`, `inputSchema` (JSON Schema 2020-12 `$schema`), `outputSchema`, and `annotations`.
+- Catalog is paginated via `cursor` / `nextCursor` and is returned in deterministic `allTools` order.
+- `tools/call` returns serialized JSON in `content[0].text` plus `structuredContent`.

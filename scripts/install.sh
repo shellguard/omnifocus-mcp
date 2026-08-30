@@ -35,7 +35,7 @@ check_swift() {
 check_omnifocus() {
   if [ ! -d "/Applications/OmniFocus.app" ] && [ ! -d "$HOME/Applications/OmniFocus.app" ]; then
     echo "Warning: OmniFocus.app not found in /Applications or ~/Applications." >&2
-    echo "         The server requires OmniFocus 4 to be installed and running." >&2
+    echo "         The server requires OmniFocus 4.8+ to be installed and running." >&2
   else
     echo "  OmniFocus: found"
   fi

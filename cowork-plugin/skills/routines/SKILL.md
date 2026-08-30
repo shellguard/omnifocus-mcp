@@ -6,7 +6,7 @@ description: >
   "recurring", "habit", "routine", "every N days".
 ---
 
-OmniFocus 4.7+ has rich repeat semantics. The defaults are usually wrong for habits — pick deliberately.
+OmniFocus 4.7+ has rich repeat semantics (4.8.4+ keeps a regular schedule when catch-up skips past occurrences; 4.8.13 applies catch-up to completed instances). The defaults are usually wrong for habits — pick deliberately.
 
 **Repeat method** (passed to `omnifocus_set_task_repetition` as `rule.method`):
 

@@ -2,7 +2,7 @@
 
 ## Add A New Tool
 
-1. Add tool schema/metadata in `Sources/OmniFocusCore/Tools.swift`.
+1. Add tool schema/metadata in `Sources/OmniFocusCore/Tools.swift` (`name` required; `title` is derived from the name unless overridden). `tools/list` also emits `outputSchema` and JSON Schema 2020-12 `$schema`.
 2. Implement action in `Resources/jxa.js` (or explicitly return unsupported behavior).
 3. Implement action in `Resources/omni_automation.js` (or explicitly return unsupported behavior).
 4. Ensure action naming matches tool dispatch (`omnifocus_<action>` -> `<action>`).

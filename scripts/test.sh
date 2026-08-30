@@ -116,7 +116,8 @@ assert_not_contains "no error field"               "$INIT_OUT" '"error":'
 assert_contains     "protocolVersion 2025-11-25"   "$INIT_OUT" '"protocolVersion":"2025-11-25"'
 assert_contains     "capabilities field present"   "$INIT_OUT" '"capabilities":'
 assert_contains     "serverInfo name"              "$INIT_OUT" '"name":"omnifocus-mcp"'
-assert_contains     "serverInfo version is 0.7.0"  "$INIT_OUT" '"version":"0.7.0"'
+assert_contains     "serverInfo version is 0.8.0"  "$INIT_OUT" '"version":"0.8.0"'
+assert_contains     "serverInfo description present" "$INIT_OUT" '"description":'
 
 LEGACY_INIT_OUT=$(rpc '{"jsonrpc":"2.0","id":11,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"0"}}}')
 assert_contains "legacy protocol request accepted" "$LEGACY_INIT_OUT" '"protocolVersion":"2024-11-05"'
@@ -734,6 +735,9 @@ assert_contains     "unknown prompt returns error"       "$UNKNOWN_PROMPT" '"err
 MISSING_PROMPT_NAME=$(rpc '{"jsonrpc":"2.0","id":76,"method":"prompts/get","params":{}}')
 assert_contains     "missing prompt name returns error"  "$MISSING_PROMPT_NAME" '"error":'
 
+assert_contains     "capture task argument is optional"  "$PROMPTS_LIST_OUT" '"required":false'
+assert_contains     "prompts include title"              "$PROMPTS_LIST_OUT" '"title":"Capture Task"'
+
 # ─── 21. logging/setLevel ────────────────────────────────────────────────────
 header "21. logging/setLevel"
 
@@ -770,6 +774,55 @@ LOG_TOOL_OUT=$(printf '%s\n%s\n' \
 assert_contains     "log notification emitted"           "$LOG_TOOL_OUT" 'notifications'
 assert_contains     "log includes logger name"           "$LOG_TOOL_OUT" '"logger":"omnifocus-mcp"'
 assert_contains     "log includes tool name"             "$LOG_TOOL_OUT" 'omnifocus_eval_automation'
+
+# ─── 24. MCP 2026-07-28 dual-era protocol ────────────────────────────────────
+header "24. MCP 2026-07-28 dual-era protocol"
+
+DISCOVER_OUT=$(rpc '{"jsonrpc":"2.0","id":240,"method":"server/discover"}')
+assert_contains     "server/discover returns result"           "$DISCOVER_OUT" '"result":'
+assert_contains     "discover lists 2026-07-28"                "$DISCOVER_OUT" '"2026-07-28"'
+assert_contains     "discover lists 2025-11-25"                "$DISCOVER_OUT" '"2025-11-25"'
+assert_contains     "discover has resultType complete"         "$DISCOVER_OUT" '"resultType":"complete"'
+assert_contains     "discover has ttlMs"                       "$DISCOVER_OUT" '"ttlMs":'
+assert_contains     "discover has cacheScope public"           "$DISCOVER_OUT" '"cacheScope":"public"'
+assert_contains     "discover has serverInfo in _meta"         "$DISCOVER_OUT" '"io.modelcontextprotocol/serverInfo"'
+assert_not_contains "discover does not advertise logging"      "$DISCOVER_OUT" '"logging"'
+
+MODERN_META='{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"test","version":"0"},"io.modelcontextprotocol/clientCapabilities":{}}}'
+
+MODERN_LIST=$(rpc "{\"jsonrpc\":\"2.0\",\"id\":241,\"method\":\"tools/list\",\"params\":$MODERN_META}")
+assert_contains     "modern tools/list has resultType"         "$MODERN_LIST" '"resultType":"complete"'
+assert_contains     "modern tools/list has ttlMs"              "$MODERN_LIST" '"ttlMs":'
+assert_contains     "modern tools/list has titles"             "$MODERN_LIST" '"title":"List Tasks"'
+assert_contains     "modern tools/list has schema dialect"     "$MODERN_LIST" 'json-schema.org/draft/2020-12/schema'
+assert_contains     "modern tools/list has outputSchema"       "$MODERN_LIST" '"outputSchema"'
+assert_contains     "legacy tools/list also has titles"        "$LIST_OUT" '"title":"List Tasks"'
+assert_not_contains "legacy tools/list omits resultType"       "$LIST_OUT" '"resultType"'
+
+UNSUPPORTED=$(rpc '{"jsonrpc":"2.0","id":242,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2099-01-01"}}}')
+assert_contains     "unsupported modern version is -32022"     "$UNSUPPORTED" '-32022'
+assert_contains     "unsupported error names requested version" "$UNSUPPORTED" '"requested":"2099-01-01"'
+assert_contains     "unsupported error lists supported"        "$UNSUPPORTED" '"supported"'
+
+MODERN_SETLEVEL=$(rpc "{\"jsonrpc\":\"2.0\",\"id\":243,\"method\":\"logging/setLevel\",\"params\":{\"level\":\"debug\",\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\"}}}")
+assert_contains     "modern logging/setLevel is method-not-found" "$MODERN_SETLEVEL" '-32601'
+
+MODERN_CALL=$(rpc "{\"jsonrpc\":\"2.0\",\"id\":244,\"method\":\"tools/call\",\"params\":{\"name\":\"omnifocus_eval_automation\",\"arguments\":{},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\"}}}")
+assert_contains     "modern tools/call error has structuredContent" "$MODERN_CALL" '"structuredContent"'
+assert_contains     "modern tools/call error has resultType"        "$MODERN_CALL" '"resultType":"complete"'
+assert_contains     "modern tools/call error sets isError"          "$MODERN_CALL" '"isError":true'
+
+LEGACY_CALL=$(rpc '{"jsonrpc":"2.0","id":245,"method":"tools/call","params":{"name":"omnifocus_eval_automation","arguments":{}}}')
+assert_contains     "legacy tools/call still has structuredContent" "$LEGACY_CALL" '"structuredContent"'
+assert_not_contains "legacy tools/call omits resultType"            "$LEGACY_CALL" '"resultType"'
+
+# First catalog name must stay stable for prompt-cache friendliness
+FIRST_TOOL=$(printf '%s' "$LIST_OUT" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["result"]["tools"][0]["name"])')
+if [ "$FIRST_TOOL" = "omnifocus_list_tasks" ]; then
+  pass "tools/list first entry is omnifocus_list_tasks"
+else
+  fail "tools/list deterministic first entry" "expected omnifocus_list_tasks, got $FIRST_TOOL"
+fi
 
 # ─── Summary ─────────────────────────────────────────────────────────────────
 printf "\n${BOLD}Results: %d passed, %d failed${NC}\n" "$PASS" "$FAIL"
