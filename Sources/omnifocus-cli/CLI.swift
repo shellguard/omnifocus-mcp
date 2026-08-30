@@ -1,5 +1,26 @@
 import Foundation
 import OmniFocusCore
+#if canImport(Glibc)
+import Glibc
+#endif
+
+// glibc exposes `stderr` as a mutable global, which Swift 6 strict-concurrency
+// checking rejects when referenced directly. Open a private, unbuffered stream
+// over the standard-error file descriptor (fd 2) instead so the handle is a
+// stable, concurrency-safe constant on both Linux and Darwin.
+nonisolated(unsafe) let stderrFP: UnsafeMutablePointer<FILE> = {
+    let fp = fdopen(2, "w")!
+    setvbuf(fp, nil, _IONBF, 0)
+    return fp
+}()
+
+// `SOCK_STREAM` is imported as the `__socket_type` enum on Linux but is already
+// `Int32` on Darwin. Normalize to the `Int32` that `socket(2)` expects.
+#if canImport(Glibc)
+let sockStreamType = Int32(SOCK_STREAM.rawValue)
+#else
+let sockStreamType = SOCK_STREAM
+#endif
 
 let socketPath = (NSString("~/.omnifocus-cli.sock").expandingTildeInPath)
 let pidPath = (NSString("~/.omnifocus-cli.pid").expandingTildeInPath)
@@ -57,8 +78,8 @@ struct OmniFocusCLI {
         let toolName = "omnifocus_" + commandName.replacingOccurrences(of: "-", with: "_")
 
         guard let tool = allTools.first(where: { $0.name == toolName }) else {
-            fputs("Error: unknown command '\(commandName)'\n", stderr)
-            fputs("Run 'omnifocus-cli --help' for a list of commands.\n", stderr)
+            fputs("Error: unknown command '\(commandName)'\n", stderrFP)
+            fputs("Run 'omnifocus-cli --help' for a list of commands.\n", stderrFP)
             exit(1)
         }
 
@@ -76,7 +97,7 @@ struct OmniFocusCLI {
         do {
             preset = try extractArgsJson(&flagArgs)
         } catch {
-            fputs("Error: \(error.localizedDescription)\n", stderr)
+            fputs("Error: \(error.localizedDescription)\n", stderrFP)
             exit(1)
         }
 
@@ -84,7 +105,7 @@ struct OmniFocusCLI {
         do {
             arguments = try parseArguments(flagArgs, schema: tool.inputSchema)
         } catch {
-            fputs("Error: \(error.localizedDescription)\n", stderr)
+            fputs("Error: \(error.localizedDescription)\n", stderrFP)
             exit(1)
         }
         // Explicit flags take precedence over --args-json values
@@ -101,7 +122,7 @@ struct OmniFocusCLI {
                 let result = try engine.callTool(named: toolName, arguments: arguments)
                 emit(result, options: outputOpts)
             } catch {
-                fputs("Error: \(error)\n", stderr)
+                fputs("Error: \(error)\n", stderrFP)
                 exit(1)
             }
         }
@@ -114,9 +135,9 @@ struct OmniFocusCLI {
         // Remove stale socket
         unlink(socketPath)
 
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        let fd = socket(AF_UNIX, sockStreamType, 0)
         guard fd >= 0 else {
-            fputs("Error: failed to create socket\n", stderr)
+            fputs("Error: failed to create socket\n", stderrFP)
             exit(1)
         }
 
@@ -131,20 +152,20 @@ struct OmniFocusCLI {
             }
         }
         guard bindResult == 0 else {
-            fputs("Error: failed to bind socket at \(socketPath): \(String(cString: strerror(errno)))\n", stderr)
+            fputs("Error: failed to bind socket at \(socketPath): \(String(cString: strerror(errno)))\n", stderrFP)
             close(fd)
             exit(1)
         }
 
         // Restrict socket to owner only (0600)
         if chmod(socketPath, 0o600) != 0 {
-            fputs("Error: failed to set socket permissions: \(String(cString: strerror(errno)))\n", stderr)
+            fputs("Error: failed to set socket permissions: \(String(cString: strerror(errno)))\n", stderrFP)
             close(fd)
             exit(1)
         }
 
         guard listen(fd, 8) == 0 else {
-            fputs("Error: failed to listen on socket\n", stderr)
+            fputs("Error: failed to listen on socket\n", stderrFP)
             close(fd)
             exit(1)
         }
@@ -153,7 +174,7 @@ struct OmniFocusCLI {
         try? "\(ProcessInfo.processInfo.processIdentifier)".write(toFile: pidPath, atomically: true, encoding: .utf8)
 
         let engine = OFEngine()
-        fputs("omnifocus-cli daemon started (pid \(ProcessInfo.processInfo.processIdentifier), socket \(socketPath))\n", stderr)
+        fputs("omnifocus-cli daemon started (pid \(ProcessInfo.processInfo.processIdentifier), socket \(socketPath))\n", stderrFP)
 
         // Store C strings for async-signal-safe cleanup
         signalSocketPath = strdup(socketPath)
@@ -257,8 +278,8 @@ struct OmniFocusCLI {
         let pathBytes = path.lengthOfBytes(using: .utf8)
         guard pathBytes <= maxBytes else {
             if reportErrors {
-                fputs("Error: socket path is too long (\(pathBytes) bytes). Maximum for this platform is \(maxBytes) bytes.\n", stderr)
-                fputs("       Path: \(path)\n", stderr)
+                fputs("Error: socket path is too long (\(pathBytes) bytes). Maximum for this platform is \(maxBytes) bytes.\n", stderrFP)
+                fputs("       Path: \(path)\n", stderrFP)
             }
             return nil
         }
@@ -309,7 +330,7 @@ struct OmniFocusCLI {
     static func sendToDaemonRaw(toolName: String, arguments: [String: Any]) -> Any? {
         guard FileManager.default.fileExists(atPath: socketPath) else { return nil }
 
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        let fd = socket(AF_UNIX, sockStreamType, 0)
         guard fd >= 0 else { return nil }
         defer { close(fd) }
 
@@ -347,7 +368,7 @@ struct OmniFocusCLI {
 
         guard response["ok"] as? Bool == true else {
             let errMsg = response["error"] as? String ?? "Unknown daemon error"
-            fputs("Error: \(errMsg)\n", stderr)
+            fputs("Error: \(errMsg)\n", stderrFP)
             exit(1)
         }
 
@@ -362,7 +383,7 @@ struct OmniFocusCLI {
     static func sendToDaemon(toolName: String, arguments: [String: Any]) -> String? {
         guard FileManager.default.fileExists(atPath: socketPath) else { return nil }
 
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        let fd = socket(AF_UNIX, sockStreamType, 0)
         guard fd >= 0 else { return nil }
         defer { close(fd) }
 
@@ -402,7 +423,7 @@ struct OmniFocusCLI {
 
         guard response["ok"] as? Bool == true else {
             let errMsg = response["error"] as? String ?? "Unknown daemon error"
-            fputs("Error: \(errMsg)\n", stderr)
+            fputs("Error: \(errMsg)\n", stderrFP)
             exit(1)
         }
 
@@ -413,7 +434,7 @@ struct OmniFocusCLI {
     static func sendDaemonCommand(_ command: String) -> [String: Any]? {
         guard FileManager.default.fileExists(atPath: socketPath) else { return nil }
 
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        let fd = socket(AF_UNIX, sockStreamType, 0)
         guard fd >= 0 else { return nil }
         defer { close(fd) }
 
@@ -470,7 +491,7 @@ struct OmniFocusCLI {
                 isOurProcess = output.hasSuffix("omnifocus-cli")
             }
             guard isOurProcess else {
-                fputs("Stale PID file (process \(pid) is not omnifocus-cli). Cleaning up.\n", stderr)
+                fputs("Stale PID file (process \(pid) is not omnifocus-cli). Cleaning up.\n", stderrFP)
                 unlink(socketPath)
                 unlink(pidPath)
                 return
@@ -480,7 +501,7 @@ struct OmniFocusCLI {
             unlink(pidPath)
             print("Daemon killed (pid \(pid)).")
         } else {
-            fputs("No daemon running.\n", stderr)
+            fputs("No daemon running.\n", stderrFP)
             exit(1)
         }
     }
@@ -542,7 +563,7 @@ struct OmniFocusCLI {
         do {
             try plist.write(toFile: launchdPlistPath, atomically: true, encoding: .utf8)
         } catch {
-            fputs("Error: failed to write plist: \(error)\n", stderr)
+            fputs("Error: failed to write plist: \(error)\n", stderrFP)
             exit(1)
         }
 
@@ -567,14 +588,14 @@ struct OmniFocusCLI {
             return
         }
 
-        fputs("Warning: plist written but launchctl bootstrap/load failed.\n", stderr)
+        fputs("Warning: plist written but launchctl bootstrap/load failed.\n", stderrFP)
         if !bootstrap.stderrText.isEmpty {
-            fputs("  bootstrap error: \(bootstrap.stderrText)\n", stderr)
+            fputs("  bootstrap error: \(bootstrap.stderrText)\n", stderrFP)
         }
         if !legacyLoad.stderrText.isEmpty {
-            fputs("  load error: \(legacyLoad.stderrText)\n", stderr)
+            fputs("  load error: \(legacyLoad.stderrText)\n", stderrFP)
         }
-        fputs("  Try: launchctl bootstrap \(launchdDomainTarget()) \(launchdPlistPath)\n", stderr)
+        fputs("  Try: launchctl bootstrap \(launchdDomainTarget()) \(launchdPlistPath)\n", stderrFP)
     }
 
     static func uninstallLaunchd() {
