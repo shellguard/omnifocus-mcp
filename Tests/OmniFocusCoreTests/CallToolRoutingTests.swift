@@ -88,6 +88,13 @@ struct CallToolRoutingTests {
         }
     }
 
+    @Test func registeredCatalogHasExpectedCountAndTitles() {
+        #expect(engine.tools.count == 90)
+        for tool in engine.tools {
+            #expect(!tool.title.isEmpty, "tool \(tool.name) is missing title")
+        }
+    }
+
     @Test func registeredToolNamesAreUnique() {
         var seen = Set<String>()
         for tool in engine.tools {

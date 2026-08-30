@@ -117,6 +117,7 @@ function taskToJSON(task) {
     shouldUseFloatingTimeZone: safeCall(task, 'shouldUseFloatingTimeZone'),
     repetitionEndDate: toISO(firstValue(task, ['repetitionEndDate'])),
     maxRepetitions: safeCall(task, 'maxRepetitions'),
+    repetition: repetitionRuleToJSON(firstValue(task, ['repetitionRule'])),
     assignedContainer: (function() {
       try {
         var ac = firstValue(task, ['assignedContainer']);
@@ -1452,7 +1453,7 @@ function getForecast(params) {
       }
     }
     if (!!safeCall(task, 'flagged')) { flagged.push(taskToJSON(task)); }
-    var plannedDate = dateValue(firstValue(task, ['plannedDate']));
+    var plannedDate = dateValue(firstValue(task, ['effectivePlannedDate', 'plannedDate']));
     if (plannedDate) {
       if (plannedDate.getTime() <= todayEnd.getTime()) {
         plannedToday.push(taskToJSON(task));
@@ -1569,8 +1570,10 @@ function listNotifications(params) {
   var task = findTaskById(doc, params.id);
   if (!task) { throw new Error('Task not found'); }
   var alarms = arrayify(firstValue(task, ['alarms', 'alerts', 'notifications']));
+  var itemTitle = safeCall(task, 'name');
   return alarms.map(function(alarm) {
     return {
+      title: itemTitle,
       id: normalizeId(safeCall(alarm, 'id')),
       kind: safeCall(alarm, 'kind') || safeCall(alarm, 'type'),
       fireDate: toISO(firstValue(alarm, ['absoluteFireDate', 'fireDate', 'date'])),
@@ -1649,7 +1652,10 @@ function setTaskRepetition(params) {
     safeSet(task, 'anchorDateKey', params.anchorDateKey);
   }
   if (params.catchUpAutomatically !== undefined) {
-    safeSet(task, 'catchUpAutomatically', params.catchUpAutomatically);
+    var ruleObj = firstValue(task, ['repetitionRule']);
+    if (ruleObj) {
+      safeSet(ruleObj, 'catchUpAutomatically', params.catchUpAutomatically);
+    }
   }
   if (params.endDate !== undefined) {
     var ed = parseDate(params.endDate);
@@ -1822,8 +1828,20 @@ function cleanUp(params) {
 }
 
 function getSettings(params) {
-  // JXA has limited settings access
-  return {backend: 'jxa', note: 'Settings access is limited in JXA backend. Use OmniAutomation backend for full settings.'};
+  return {
+    backend: 'jxa',
+    capabilities: {
+      plannedDates: true,
+      exclusiveTags: true,
+      appleFoundationModels: false,
+      promiseEvaluateJavascript: false
+    },
+    forecast: {
+      forecastTag: null,
+      viewOptionsNote: 'Forecast tag and Settings.objectForKey require the Omni Automation backend.'
+    },
+    note: 'Settings access is limited in JXA backend. Use OmniAutomation backend for full settings.'
+  };
 }
 
 function listLinkedFiles(params) {
@@ -1904,8 +1922,11 @@ function searchTasksNative(params) {
 }
 
 function lookupUrl(params) {
-  // JXA: limited support
-  return {error: 'URL lookup not available in JXA backend. Use OmniAutomation backend.'};
+  return {
+    error: 'URL lookup not available in JXA backend. Use OmniAutomation backend.',
+    url: params.url,
+    urlParams: parseOmniFocusUrl(params.url)
+  };
 }
 
 function getForecastDays(params) {

@@ -1,7 +1,7 @@
 ---
 name: date-semantics
 description: >
-  Reference for OmniFocus 4.7+ date semantics: due, planned, defer.
+  Reference for OmniFocus 4.7+ date semantics: due, planned, defer. Forecast “items on planned date” is a first-class view option as of 4.8.
   Use when assigning dates, when the user says "schedule", "remind me", or
   any time it would otherwise be tempting to overload `due` for non-deadlines.
 ---
@@ -15,7 +15,8 @@ OmniFocus 4.7+ has three distinct date fields with different semantics. Pick del
 
 **`planned` — intended work date** (4.7+)
 - Use for "I want to work on this on Friday", "my plan is to tackle this Tuesday morning", "schedule it for next week".
-- Surfaces in `plannedToday` / `plannedSoon` in `omnifocus_get_forecast`.
+- Surfaces in `plannedToday` / `plannedSoon` in `omnifocus_get_forecast` (including inherited `effectivePlannedDate`).
+- OmniFocus Forecast can show items on planned date as its own view option (4.8).
 - Doesn't create urgency or overdue alarms — it's a planning aid, not a deadline.
 
 **`defer` — hide-until date**

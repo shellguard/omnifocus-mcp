@@ -1,4 +1,4 @@
-// Tool definitions for all 85 OmniFocus MCP tools.
+// Tool definitions for all 90 OmniFocus MCP tools.
 
 nonisolated(unsafe) public let allTools: [ToolDefinition] = [
     ToolDefinition(
@@ -185,17 +185,18 @@ nonisolated(unsafe) public let allTools: [ToolDefinition] = [
     ),
     ToolDefinition(
         name: "omnifocus_eval_automation",
-        description: "Evaluate Omni Automation JavaScript inside OmniFocus. DANGER: executes arbitrary code with full read/write/delete access to ALL OmniFocus data. This is an unrestricted, fully privileged code execution tool — use only when no other tool can accomplish the task. Never pass untrusted or user-generated input as the script parameter. The allowDestructive flag enables a best-effort regex hint that catches common destructive patterns, but it is NOT a security boundary — determined scripts can bypass it via computed property names or aliases.",
+        description: "Evaluate Omni Automation JavaScript inside OmniFocus. DANGER: executes arbitrary code with full read/write/delete access to ALL OmniFocus data. This is an unrestricted, fully privileged code execution tool — use only when no other tool can accomplish the task. Never pass untrusted or user-generated input as the script parameter. The allowDestructive flag enables a best-effort regex hint that catches common destructive patterns, but it is NOT a security boundary — determined scripts can bypass it via computed property names or aliases. OmniFocus 4.8.4+ resolves Promise results from async scripts, including LanguageModel.Session (on-device Apple Foundation Models on macOS 26).",
         inputSchema: [
             "type": "object",
             "properties": [
-                "script": ["type": "string", "description": "Omni Automation JavaScript to evaluate"],
+                "script": ["type": "string", "description": "Omni Automation JavaScript to evaluate. Async IIFEs that return Promises work on OmniFocus 4.8.4+."],
                 "parseJson": ["type": "boolean", "description": "Parse JSON output if possible"],
                 "allowDestructive": ["type": "boolean", "description": "Allow destructive operations (delete, drop, remove) in the script. Default: false."]
             ],
             "required": ["script"]
         ],
-        annotations: destructiveAnnotation.merging(["title": "Evaluate Omni Automation Script"]) { _, new in new }
+        annotations: destructiveAnnotation,
+        title: "Evaluate Omni Automation Script"
     ),
     ToolDefinition(
         name: "omnifocus_get_task",
@@ -663,7 +664,7 @@ nonisolated(unsafe) public let allTools: [ToolDefinition] = [
                 "rule": ["type": "string", "description": "iCal RRULE string, e.g. FREQ=WEEKLY;INTERVAL=1, or null to clear"],
                 "scheduleType": ["type": "string", "enum": ["due", "defer", "fixed"], "description": "How the repetition is scheduled"],
                 "anchorDateKey": ["type": "string", "enum": ["due", "defer", "planned"], "description": "v4.7+: which date anchors repetition"],
-                "catchUpAutomatically": ["type": "boolean", "description": "Whether missed repetitions should catch up"],
+                "catchUpAutomatically": ["type": "boolean", "description": "Whether missed repetitions skip forward to the next future date (applied on the repetition rule, not the task). 4.8.4+ keeps a regular schedule when skipping; 4.8.13 applies catch-up to completed instances."],
                 "endDate": ["type": "string", "description": "ISO 8601 date: stop repeating after this date (v4.7+)"],
                 "maxOccurrences": ["type": "integer", "description": "Maximum number of repetitions (v4.7+)"]
             ],
@@ -767,11 +768,11 @@ nonisolated(unsafe) public let allTools: [ToolDefinition] = [
     ),
     ToolDefinition(
         name: "omnifocus_get_settings",
-        description: "Retrieve OmniFocus application settings. Pass specific keys to read their values.",
+        description: "Retrieve OmniFocus application settings plus capability flags (planned dates, exclusive tags, on-device LanguageModel). Pass keys to read Settings.objectForKey values.",
         inputSchema: [
             "type": "object",
             "properties": [
-                "keys": ["type": "array", "items": ["type": "string"], "description": "Setting keys to retrieve"]
+                "keys": ["type": "array", "items": ["type": "string"], "description": "Setting keys to retrieve via Settings.objectForKey"]
             ]
         ],
         annotations: readOnlyAnnotation
@@ -852,11 +853,11 @@ nonisolated(unsafe) public let allTools: [ToolDefinition] = [
     ),
     ToolDefinition(
         name: "omnifocus_lookup_url",
-        description: "Look up an OmniFocus object by its URL (omnifocus:///task/ID, etc). Returns the serialized object.",
+        description: "Look up an OmniFocus object by its URL (omnifocus:///task/ID, etc). Parses query params including planned (4.7.1+), due, and defer.",
         inputSchema: [
             "type": "object",
             "properties": [
-                "url": ["type": "string", "description": "OmniFocus URL to look up"]
+                "url": ["type": "string", "description": "OmniFocus URL to look up, optionally with ?planned= / ?due= / ?defer= ISO dates"]
             ],
             "required": ["url"]
         ],

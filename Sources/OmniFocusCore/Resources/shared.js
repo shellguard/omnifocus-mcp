@@ -165,3 +165,49 @@ function appendNote(obj, text) {
   var separator = existing ? '\n' : '';
   safeSet(obj, 'note', existing + separator + text);
 }
+
+function enumString(value) {
+  if (value === null || value === undefined) { return null; }
+  return String(value);
+}
+
+function repetitionRuleToJSON(rule) {
+  if (!rule) { return null; }
+  if (typeof rule === 'string') {
+    return { ruleString: rule, catchUpAutomatically: null, scheduleType: null, anchorDateKey: null, method: null };
+  }
+  return {
+    ruleString: safeCall(rule, 'ruleString'),
+    catchUpAutomatically: safeCall(rule, 'catchUpAutomatically'),
+    scheduleType: enumString(safeCall(rule, 'scheduleType')),
+    anchorDateKey: enumString(safeCall(rule, 'anchorDateKey')),
+    method: enumString(safeCall(rule, 'method'))
+  };
+}
+
+function parseOmniFocusUrl(urlStr) {
+  var result = { url: urlStr || null, type: null, id: null, query: {} };
+  if (!urlStr || typeof urlStr !== 'string') { return result; }
+  try {
+    var qIndex = urlStr.indexOf('?');
+    var base = qIndex >= 0 ? urlStr.slice(0, qIndex) : urlStr;
+    var query = qIndex >= 0 ? urlStr.slice(qIndex + 1) : '';
+    var path = base.replace(/^omnifocus:\/\//i, '').replace(/^\/+/, '');
+    var parts = path.split('/');
+    if (parts[0]) { result.type = parts[0]; }
+    if (parts[1]) { result.id = parts[1]; }
+    if (query) {
+      var pairs = query.split('&');
+      for (var i = 0; i < pairs.length; i++) {
+        if (!pairs[i]) { continue; }
+        var eq = pairs[i].indexOf('=');
+        var key = eq >= 0 ? pairs[i].slice(0, eq) : pairs[i];
+        var val = eq >= 0 ? pairs[i].slice(eq + 1) : '';
+        try { key = decodeURIComponent(key); } catch (e) {}
+        try { val = decodeURIComponent(val.replace(/\+/g, ' ')); } catch (e2) {}
+        if (key) { result.query[key] = val; }
+      }
+    }
+  } catch (e) {}
+  return result;
+}

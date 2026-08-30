@@ -199,6 +199,7 @@
       shouldUseFloatingTimeZone: safeCall(task, 'shouldUseFloatingTimeZone'),
       repetitionEndDate: toISO(firstValue(task, ['repetitionEndDate'])),
       maxRepetitions: safeCall(task, 'maxRepetitions'),
+      repetition: repetitionRuleToJSON(firstValue(task, ['repetitionRule'])),
       assignedContainer: (function() {
         try {
           var ac = firstValue(task, ['assignedContainer']);
@@ -1799,7 +1800,7 @@
         }
       }
       if (!!safeCall(task, 'flagged')) { flagged.push(taskToJSON(task)); }
-      var plannedDate = dateValue(firstValue(task, ['plannedDate']));
+      var plannedDate = dateValue(firstValue(task, ['effectivePlannedDate', 'plannedDate']));
       if (plannedDate) {
         if (plannedDate.getTime() <= todayEnd.getTime()) {
           plannedToday.push(taskToJSON(task));
@@ -1929,8 +1930,10 @@
     var task = findTaskById(doc, params.id);
     if (!task) { throw new Error('Task not found'); }
     var alarms = arrayify(firstValue(task, ['alarms', 'alerts', 'notifications']));
+    var itemTitle = safeCall(task, 'name');
     return alarms.map(function(alarm) {
       return {
+        title: itemTitle,
         id: idValue(alarm),
         kind: safeCall(alarm, 'kind') || safeCall(alarm, 'type'),
         fireDate: toISO(firstValue(alarm, ['absoluteFireDate', 'fireDate', 'date'])),
@@ -1980,6 +1983,51 @@
     throw new Error('Notification not found');
   }
 
+  function buildRepetitionRule(params) {
+    if (typeof Task === 'undefined' || !Task.RepetitionRule) { return null; }
+    var catchUp = params.catchUpAutomatically === undefined ? null : !!params.catchUpAutomatically;
+    var scheduleType = null;
+    if (Task.RepetitionScheduleType && params.scheduleType) {
+      var stMap = {
+        'fixed': Task.RepetitionScheduleType.Fixed,
+        'due': Task.RepetitionScheduleType.DueDate,
+        'defer': Task.RepetitionScheduleType.DeferUntilDate || Task.RepetitionScheduleType.DeferDate
+      };
+      scheduleType = stMap[params.scheduleType] || null;
+    }
+    var anchor = null;
+    if (Task.AnchorDateKey && params.anchorDateKey) {
+      var anchorMap = {
+        'due': Task.AnchorDateKey.Due,
+        'defer': Task.AnchorDateKey.Defer,
+        'planned': Task.AnchorDateKey.Planned
+      };
+      anchor = anchorMap[params.anchorDateKey];
+    }
+    var method = null;
+    if (Task.RepetitionMethod) {
+      var methodMap = {
+        'fixed': Task.RepetitionMethod.Fixed,
+        'due': Task.RepetitionMethod.DueDate,
+        'defer': Task.RepetitionMethod.DeferDate
+      };
+      method = methodMap[params.scheduleType || 'due'] || Task.RepetitionMethod.DueDate;
+    }
+    var factories = [
+      function() { return new Task.RepetitionRule(params.rule, null, scheduleType, anchor, catchUp); },
+      function() { return new Task.RepetitionRule(params.rule, scheduleType, anchor, catchUp); },
+      function() { return new Task.RepetitionRule(params.rule, method, scheduleType, anchor, catchUp); },
+      function() { return new Task.RepetitionRule(params.rule, method); }
+    ];
+    for (var i = 0; i < factories.length; i++) {
+      try {
+        var rule = factories[i]();
+        if (rule) { return rule; }
+      } catch (e) {}
+    }
+    return null;
+  }
+
   function setTaskRepetition(params) {
     var doc = getDatabase();
     var task = findTaskById(doc, params.id);
@@ -1990,17 +2038,9 @@
       return taskToJSON(task);
     }
     var applied = false;
-    if (typeof Task !== 'undefined' && Task.RepetitionRule && Task.RepetitionMethod) {
-      try {
-        var methodMap = {
-          'fixed': Task.RepetitionMethod.Fixed,
-          'due': Task.RepetitionMethod.DueDate,
-          'defer': Task.RepetitionMethod.DeferDate
-        };
-        var method = methodMap[params.scheduleType || 'due'] || Task.RepetitionMethod.DueDate;
-        var rule = new Task.RepetitionRule(params.rule, method);
-        applied = safeSet(task, 'repetitionRule', rule);
-      } catch (e) {}
+    var built = buildRepetitionRule(params);
+    if (built != null) {
+      applied = safeSet(task, 'repetitionRule', built);
     }
     if (!applied) {
       if (!safeSet(task, 'repetitionRule', params.rule)) {
@@ -2023,8 +2063,9 @@
         if (anchor !== undefined) { safeSet(task, 'anchorDateKey', anchor); }
       } catch (e) {}
     }
-    if (params.catchUpAutomatically !== undefined) {
-      safeSet(task, 'catchUpAutomatically', params.catchUpAutomatically);
+    var ruleObj = firstValue(task, ['repetitionRule']);
+    if (ruleObj && params.catchUpAutomatically !== undefined) {
+      safeSet(ruleObj, 'catchUpAutomatically', params.catchUpAutomatically);
     }
     if (params.endDate !== undefined) {
       var ed = parseDate(params.endDate);
@@ -2237,26 +2278,59 @@
   }
 
   function getSettings(params) {
-    var result = {backend: 'automation'};
+    var result = {
+      backend: 'automation',
+      capabilities: {
+        plannedDates: false,
+        exclusiveTags: false,
+        appleFoundationModels: (typeof LanguageModel !== 'undefined'),
+        promiseEvaluateJavascript: true
+      },
+      forecast: {
+        forecastTag: null,
+        viewOptionsNote: 'Forecast view options (items on planned date, only count due items, add-or-drag assign) live in OmniFocus Settings. Pass keys[] to read Settings.objectForKey values.'
+      }
+    };
+    try {
+      result.capabilities.plannedDates = (typeof Task !== 'undefined' && Task.prototype && 'plannedDate' in Task.prototype) ||
+        (typeof flattenedTasks !== 'undefined');
+    } catch (e) {}
+    try {
+      if (typeof Tag !== 'undefined') {
+        result.capabilities.exclusiveTags = true;
+        if (Tag.forecastTag) {
+          result.forecast.forecastTag = tagToJSON(Tag.forecastTag);
+        }
+      }
+    } catch (e2) {}
+    try {
+      var probe = (typeof flattenedTasks !== 'undefined') ? flattenedTasks[0] : null;
+      if (probe) {
+        result.capabilities.plannedDates = firstValue(probe, ['plannedDate', 'effectivePlannedDate']) !== undefined ||
+          result.capabilities.plannedDates;
+      }
+    } catch (e3) {}
     try {
       if (typeof Settings !== 'undefined') {
         var keys = params.keys || [];
         if (keys.length === 0) {
-          result.note = 'Pass specific setting keys to retrieve values';
+          result.note = 'Pass specific setting keys to retrieve values via Settings.objectForKey';
         } else {
+          result.values = {};
           for (var i = 0; i < keys.length; i++) {
             try {
               var val = Settings.objectForKey(keys[i]);
-              result[keys[i]] = val !== null && val !== undefined ? String(val) : null;
-            } catch (e) { result[keys[i]] = null; }
+              result.values[keys[i]] = val !== null && val !== undefined ? String(val) : null;
+            } catch (e) { result.values[keys[i]] = null; }
           }
         }
       } else if (typeof settings !== 'undefined') {
         var keys2 = params.keys || [];
+        result.values = {};
         for (var j = 0; j < keys2.length; j++) {
           try {
-            result[keys2[j]] = String(safeCall(settings, keys2[j]));
-          } catch (e) { result[keys2[j]] = null; }
+            result.values[keys2[j]] = String(safeCall(settings, keys2[j]));
+          } catch (e) { result.values[keys2[j]] = null; }
         }
       }
     } catch (e) {}
@@ -2374,30 +2448,44 @@
   }
 
   function lookupUrl(params) {
+    var parsed = parseOmniFocusUrl(params.url);
     var doc = getDatabase();
     try {
       if (typeof doc.objectForURL === 'function') {
         var url = URL.fromString(params.url);
         var obj = doc.objectForURL(url);
-        if (!obj) { return {found: false}; }
+        if (!obj) {
+          return {found: false, url: params.url, urlParams: parsed};
+        }
         var typeName = '';
         try { typeName = obj.constructor ? obj.constructor.name : ''; } catch (e) {}
+        var payload = {found: true, type: typeName || parsed.type || 'unknown', urlParams: parsed};
         if (typeName === 'Task' || safeCall(obj, 'taskStatus') !== null) {
-          return {found: true, type: 'task', object: taskToJSON(obj)};
+          payload.type = 'task';
+          payload.object = taskToJSON(obj);
+          return payload;
         }
         if (typeName === 'Project' || safeCall(obj, 'containsSingletonActions') !== null) {
-          return {found: true, type: 'project', object: projectToJSON(obj)};
+          payload.type = 'project';
+          payload.object = projectToJSON(obj);
+          return payload;
         }
         if (typeName === 'Tag' || safeCall(obj, 'allowsNextAction') !== null) {
-          return {found: true, type: 'tag', object: tagToJSON(obj)};
+          payload.type = 'tag';
+          payload.object = tagToJSON(obj);
+          return payload;
         }
         if (typeName === 'Folder') {
-          return {found: true, type: 'folder', object: folderToJSON(obj)};
+          payload.type = 'folder';
+          payload.object = folderToJSON(obj);
+          return payload;
         }
-        return {found: true, type: typeName || 'unknown', id: idValue(obj), name: safeCall(obj, 'name')};
+        payload.id = idValue(obj);
+        payload.name = safeCall(obj, 'name');
+        return payload;
       }
     } catch (e) {}
-    return {error: 'URL lookup not available', url: params.url};
+    return {error: 'URL lookup not available', url: params.url, urlParams: parsed};
   }
 
   function getForecastDays(params) {
@@ -2412,7 +2500,8 @@
             name: safeCall(day, 'name'),
             kind: safeCall(day, 'kind') ? String(safeCall(day, 'kind')) : null,
             badgeCount: safeCall(day, 'badgeCount'),
-            deferredCount: safeCall(day, 'deferredCount')
+            deferredCount: safeCall(day, 'deferredCount'),
+            plannedCount: firstValue(day, ['plannedCount', 'plannedItemCount'])
           });
           try { var nextDay = (day && typeof day.next === 'function') ? day.next() : null; day = nextDay; } catch (e) { day = null; }
         }

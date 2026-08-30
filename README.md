@@ -9,7 +9,7 @@ The implementation uses Omni Automation where available, with JXA fallback.
 
 ## Requirements
 
-- macOS with OmniFocus 4 installed
+- macOS with OmniFocus 4.8+ installed (4.7 works for planned dates / exclusive tags; 4.8.4+ needed for Promise-based Omni Automation and on-device LanguageModel)
 - Swift 6.2+ toolchain
 - Automation permission to control OmniFocus:
   System Settings > Privacy & Security > Automation
@@ -55,13 +55,16 @@ Release binaries:
 
 Configure your MCP client to launch `omnifocus-mcp`.
 
-Protocol compatibility:
+Protocol compatibility (dual-era):
 
-- Supports MCP protocol versions: `2025-11-25`, `2025-06-18`, `2024-11-05`
-- `initialize` negotiates protocol version (uses requested version when supported, otherwise falls back to latest supported)
-- Accepts both lifecycle notifications: `initialized` (legacy) and `notifications/initialized` (current)
-- `tools/call` execution failures are returned as MCP tool results with `isError: true` (invalid method/tool lookup still use JSON-RPC errors)
-- `tools/list` supports cursor pagination (`params.cursor` / `result.nextCursor`)
+- Modern: `2026-07-28` via `server/discover` and per-request `_meta.io.modelcontextprotocol/protocolVersion`
+- Legacy handshake: `2025-11-25`, `2025-06-18`, `2024-11-05` via `initialize`
+- Unknown modern `_meta` versions return `-32022` with `data.supported`
+- Unknown `initialize` versions fall back to `2025-11-25`
+- Accepts both lifecycle notifications: `initialized` (legacy) and `notifications/initialized`
+- `tools/call` returns text content plus `structuredContent`; execution failures use `isError: true`
+- `tools/list` supports cursor pagination (`params.cursor` / `result.nextCursor`) and cache hints on the modern path
+- Tool catalog entries include `title`, JSON Schema 2020-12 `$schema`, and `outputSchema`
 
 Example MCP config:
 
@@ -322,3 +325,5 @@ If your binary is not at `/usr/local/bin/omnifocus-mcp`, update `cowork-plugin/.
 - `omnifocus_eval_automation` executes arbitrary JavaScript inside OmniFocus. The `allowDestructive` flag is a best-effort regex hint, not a security boundary. Never pass untrusted input as the script parameter.
 - Do not expose the CLI daemon socket over a network. Use stdio for MCP server integration.
 - OmniFocus 4.7+ enforces mutually exclusive tags. Tools return warnings when tags are rejected, but automation workflows should account for these constraints.
+- OmniFocus 4.8.4+ resolves Promises from `evaluate javascript`. Use `omnifocus_eval_automation` with an async IIFE to call `LanguageModel.Session` (Apple Intelligence, macOS 26).
+- Catch-up repeats are a property of the repetition rule. `omnifocus_set_task_repetition` applies `catchUpAutomatically` on the rule, not the task.

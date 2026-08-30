@@ -9,47 +9,78 @@ struct OmniFocusMCPServer {
     }
 }
 
+enum ProtocolEra {
+    case legacy
+    case modern
+}
+
+struct RequestContext {
+    let id: Any?
+    let era: ProtocolEra
+    let protocolVersion: String
+    let requestLogLevel: String?
+}
+
 final class MCPServer {
     let engine = OFEngine()
     let stdout = FileHandle.standardOutput
     let stdin = FileHandle.standardInput
 
     let maxBufferSize = 10 * 1024 * 1024 // 10 MB
-    let serverVersion = "0.7.0"
-    let supportedProtocolVersions = ["2025-11-25", "2025-06-18", "2024-11-05"]
+    let serverVersion = "0.8.0"
+    let serverDescription = "OmniFocus MCP server and CLI for macOS (Omni Automation + JXA)"
+    let modernProtocolVersion = "2026-07-28"
+    let legacyHandshakeVersions = ["2025-11-25", "2025-06-18", "2024-11-05"]
+    let defaultLegacyVersion = "2025-11-25"
     let defaultToolsPageSize = 100
+    let listCacheTtlMs = 3_600_000
 
-    // Logging
+    var supportedProtocolVersions: [String] {
+        [modernProtocolVersion] + legacyHandshakeVersions
+    }
+
+    // Logging (legacy session-scoped; modern uses per-request _meta logLevel)
     static let logLevelOrder = ["debug", "info", "notice", "warning", "error", "critical", "alert", "emergency"]
     var logLevel: String = "warning"
 
-    // Sampling
+    // Sampling (legacy clients only)
     var clientSupportsSampling = false
     private var nextRequestId = 1
 
     // Shared read buffer (extracted from run() to support bidirectional reads)
     private var buffer = Data()
 
+    // Last initialize-negotiated version for legacy requests that omit _meta
+    var legacyNegotiatedVersion = "2025-11-25"
+
     // Prompts
     struct Prompt {
         let name: String
+        let title: String
         let description: String
-        let arguments: [[String: String]]
+        let arguments: [[String: Any]]
     }
 
     let prompts: [Prompt] = [
         Prompt(
             name: "capture",
+            title: "Capture Task",
             description: "Capture a task to OmniFocus inbox",
-            arguments: [["name": "task", "description": "Task description to capture"]]
+            arguments: [[
+                "name": "task",
+                "description": "Task description to capture",
+                "required": false
+            ]]
         ),
         Prompt(
             name: "forecast",
+            title: "Forecast",
             description: "Show your OmniFocus forecast — overdue, today, and flagged tasks",
             arguments: []
         ),
         Prompt(
             name: "review",
+            title: "Review",
             description: "Run a quick OmniFocus review — inbox, overdue, stalled projects",
             arguments: []
         )
@@ -136,91 +167,109 @@ final class MCPServer {
             throw MCPError.invalidRequest("Missing method")
         }
 
+        let params = message["params"] as? [String: Any] ?? [:]
+        let context: RequestContext
+        do {
+            context = try makeRequestContext(id: id, method: method, params: params)
+        } catch let unsupported as UnsupportedProtocol {
+            sendUnsupportedProtocolVersion(id: id, requested: unsupported.requested)
+            return
+        }
+
         switch method {
         case "initialize":
-            let params = message["params"] as? [String: Any] ?? [:]
             let requestedVersion = params["protocolVersion"] as? String
-            let negotiatedVersion = negotiateProtocolVersion(requestedVersion)
+            let negotiatedVersion = negotiateHandshakeVersion(requestedVersion)
+            legacyNegotiatedVersion = negotiatedVersion
 
-            // Detect client sampling capability
             if let clientCaps = params["capabilities"] as? [String: Any],
                clientCaps["sampling"] != nil {
                 clientSupportsSampling = true
             }
 
-            let result: [String: Any] = [
+            sendResult(id: id, result: [
                 "protocolVersion": negotiatedVersion,
-                "capabilities": [
-                    "tools": [String: Any](),
-                    "prompts": [String: Any](),
-                    "logging": [String: Any]()
-                ],
-                "serverInfo": ["name": "omnifocus-mcp", "version": serverVersion]
-            ]
-            sendResult(id: id, result: result)
+                "capabilities": handshakeCapabilities(for: negotiatedVersion),
+                "serverInfo": serverInfoObject
+            ], context: RequestContext(
+                id: id,
+                era: .legacy,
+                protocolVersion: negotiatedVersion,
+                requestLogLevel: context.requestLogLevel
+            ))
+
+        case "server/discover":
+            sendResult(id: id, result: buildDiscoverResult(), context: RequestContext(
+                id: id,
+                era: .modern,
+                protocolVersion: modernProtocolVersion,
+                requestLogLevel: context.requestLogLevel
+            ), cacheable: true)
 
         case "tools/list":
-            let params = message["params"] as? [String: Any]
             let result = try buildToolsListResult(params: params)
-            sendResult(id: id, result: result)
+            sendResult(id: id, result: result, context: context, cacheable: true)
 
         case "tools/call":
-            guard let params = message["params"] as? [String: Any],
-                  let toolName = params["name"] as? String else {
+            guard let toolName = params["name"] as? String else {
                 throw MCPError.invalidParams("Missing tool name")
             }
             let arguments = params["arguments"] as? [String: Any] ?? [String: Any]()
-            sendLog(level: "info", data: "Calling tool: \(toolName)")
+            sendLog(level: "info", data: "Calling tool: \(toolName)", context: context)
             do {
                 let resultValue = try engine.callTool(named: toolName, arguments: arguments)
                 let jsonText = try OFEngine.serializeToolResult(resultValue)
-                sendLog(level: "debug", data: "Tool \(toolName) completed successfully")
-                let response: [String: Any] = [
+                sendLog(level: "debug", data: "Tool \(toolName) completed successfully", context: context)
+                var response: [String: Any] = [
                     "content": [["type": "text", "text": jsonText]]
                 ]
-                sendResult(id: id, result: response)
+                if let structured = structuredContent(from: resultValue, jsonText: jsonText) {
+                    response["structuredContent"] = structured
+                }
+                sendResult(id: id, result: response, context: context)
             } catch let error as MCPError {
                 switch error {
                 case .toolNotFound:
                     throw error
                 case .invalidParams, .toolError, .scriptError:
-                    sendLog(level: "error", data: "Tool \(toolName) failed: \(error.description)")
-                    sendToolErrorResult(id: id, message: error.description)
+                    sendLog(level: "error", data: "Tool \(toolName) failed: \(error.description)", context: context)
+                    sendToolErrorResult(id: id, message: error.description, context: context)
                 case .invalidRequest, .methodNotFound:
                     throw error
                 }
             } catch {
-                sendLog(level: "error", data: "Tool \(toolName) failed: \(error.localizedDescription)")
-                sendToolErrorResult(id: id, message: "Internal tool execution error: \(error.localizedDescription)")
+                sendLog(level: "error", data: "Tool \(toolName) failed: \(error.localizedDescription)", context: context)
+                sendToolErrorResult(id: id, message: "Internal tool execution error: \(error.localizedDescription)", context: context)
             }
 
         case "prompts/list":
-            sendResult(id: id, result: buildPromptsListResult())
+            sendResult(id: id, result: buildPromptsListResult(), context: context, cacheable: true)
 
         case "prompts/get":
-            guard let params = message["params"] as? [String: Any],
-                  let name = params["name"] as? String else {
+            guard let name = params["name"] as? String else {
                 throw MCPError.invalidParams("Missing prompt name")
             }
             let arguments = params["arguments"] as? [String: String] ?? [:]
             let result = try buildPromptGetResult(name: name, arguments: arguments)
-            sendResult(id: id, result: result)
+            sendResult(id: id, result: result, context: context)
 
         case "logging/setLevel":
-            guard let params = message["params"] as? [String: Any],
-                  let level = params["level"] as? String else {
+            if context.era == .modern {
+                throw MCPError.methodNotFound("logging/setLevel was removed in protocol 2026-07-28; set io.modelcontextprotocol/logLevel on request _meta")
+            }
+            guard let level = params["level"] as? String else {
                 throw MCPError.invalidParams("Missing log level")
             }
             guard MCPServer.logLevelOrder.contains(level) else {
                 throw MCPError.invalidParams("Invalid log level: \(level)")
             }
             logLevel = level
-            sendResult(id: id, result: [:])
+            sendResult(id: id, result: [:], context: context)
 
         case "initialized", "notifications/initialized":
             return
         case "shutdown":
-            sendResult(id: id, result: [:])
+            sendResult(id: id, result: [:], context: context)
             return
         case "exit":
             return
@@ -229,20 +278,84 @@ final class MCPServer {
         }
     }
 
+    // MARK: - Protocol era
+
+    struct UnsupportedProtocol: Error {
+        let requested: String
+    }
+
+    func makeRequestContext(id: Any?, method: String?, params: [String: Any]) throws -> RequestContext {
+        let meta = params["_meta"] as? [String: Any] ?? [:]
+        let requestLogLevel = meta["io.modelcontextprotocol/logLevel"] as? String
+        if let requested = meta["io.modelcontextprotocol/protocolVersion"] as? String {
+            guard supportedProtocolVersions.contains(requested) else {
+                throw UnsupportedProtocol(requested: requested)
+            }
+            let era: ProtocolEra = requested == modernProtocolVersion ? .modern : .legacy
+            return RequestContext(id: id, era: era, protocolVersion: requested, requestLogLevel: requestLogLevel)
+        }
+        if method == "server/discover" {
+            return RequestContext(id: id, era: .modern, protocolVersion: modernProtocolVersion, requestLogLevel: requestLogLevel)
+        }
+        return RequestContext(id: id, era: .legacy, protocolVersion: legacyNegotiatedVersion, requestLogLevel: requestLogLevel)
+    }
+
+    func negotiateHandshakeVersion(_ requestedVersion: String?) -> String {
+        guard let requestedVersion else {
+            return defaultLegacyVersion
+        }
+        if requestedVersion == modernProtocolVersion || legacyHandshakeVersions.contains(requestedVersion) {
+            return requestedVersion
+        }
+        return defaultLegacyVersion
+    }
+
+    var serverInfoObject: [String: Any] {
+        [
+            "name": "omnifocus-mcp",
+            "version": serverVersion,
+            "description": serverDescription
+        ]
+    }
+
+    func handshakeCapabilities(for version: String) -> [String: Any] {
+        var caps: [String: Any] = [
+            "tools": ["listChanged": false],
+            "prompts": [String: Any]()
+        ]
+        // Logging remains on the legacy path only (deprecated in 2026-07-28).
+        if version != modernProtocolVersion {
+            caps["logging"] = [String: Any]()
+        }
+        return caps
+    }
+
+    func modernCapabilities() -> [String: Any] {
+        [
+            "tools": ["listChanged": false],
+            "prompts": [String: Any]()
+        ]
+    }
+
+    func buildDiscoverResult() -> [String: Any] {
+        [
+            "supportedVersions": supportedProtocolVersions,
+            "capabilities": modernCapabilities(),
+            "instructions": "OmniFocus task manager for macOS. Prefer dedicated omnifocus_* tools over eval. Date fields: due is a deadline, planned is intended work (4.7+), defer hides until a date. Mutually exclusive tag groups may reject extra tags."
+        ]
+    }
+
     // MARK: - Prompts
 
     func buildPromptsListResult() -> [String: Any] {
         let entries = prompts.map { prompt -> [String: Any] in
             var entry: [String: Any] = [
                 "name": prompt.name,
+                "title": prompt.title,
                 "description": prompt.description
             ]
             if !prompt.arguments.isEmpty {
-                entry["arguments"] = prompt.arguments.map { arg -> [String: Any] in
-                    var a: [String: Any] = ["name": arg["name"]!]
-                    if let d = arg["description"] { a["description"] = d }
-                    return a
-                }
+                entry["arguments"] = prompt.arguments
             }
             return entry
         }
@@ -282,7 +395,7 @@ final class MCPServer {
                 The result has seven lists. Render only non-empty sections in this order:
                 1. **Overdue** — `overdue`. Flag this section.
                 2. **Due today** — `today`.
-                3. **Planned today** — `plannedToday` (intended-work-date today, OmniFocus 4.7+).
+                3. **Planned today** — `plannedToday` (intended-work-date today, including inherited `effectivePlannedDate`).
                 4. **Forecast tag** — `forecastTagged` (tasks carrying the user's Forecast tag, not already listed above).
                 5. **Flagged** — `flagged`, excluding entries already shown.
                 6. **Due this week** — `dueThisWeek`.
@@ -324,9 +437,17 @@ final class MCPServer {
 
     // MARK: - Logging
 
-    func sendLog(level: String, data: String, logger: String = "omnifocus-mcp") {
+    func sendLog(level: String, data: String, logger: String = "omnifocus-mcp", context: RequestContext) {
+        let effectiveLevel: String?
+        switch context.era {
+        case .modern:
+            effectiveLevel = context.requestLogLevel
+        case .legacy:
+            effectiveLevel = logLevel
+        }
+        guard let effectiveLevel else { return }
         let levelIndex = MCPServer.logLevelOrder.firstIndex(of: level) ?? 0
-        let currentIndex = MCPServer.logLevelOrder.firstIndex(of: logLevel) ?? 0
+        let currentIndex = MCPServer.logLevelOrder.firstIndex(of: effectiveLevel) ?? 0
         guard levelIndex >= currentIndex else { return }
         sendNotification(method: "notifications/message", params: [
             "level": level,
@@ -371,7 +492,6 @@ final class MCPServer {
                 continue
             }
 
-            // Check if this is our response
             if let responseId = msg["id"] as? Int, responseId == requestId {
                 if let error = msg["error"] as? [String: Any] {
                     throw MCPError.scriptError(error["message"] as? String ?? "Sampling request failed")
@@ -382,7 +502,6 @@ final class MCPServer {
                 throw MCPError.scriptError("Invalid sampling response")
             }
 
-            // Handle other messages that arrive while waiting
             handleLine(lineData)
         }
         throw MCPError.scriptError("Sampling request timed out")
@@ -390,22 +509,27 @@ final class MCPServer {
 
     // MARK: - Protocol Helpers
 
-    func negotiateProtocolVersion(_ requestedVersion: String?) -> String {
-        guard let requestedVersion else {
-            return supportedProtocolVersions[0]
-        }
-        if supportedProtocolVersions.contains(requestedVersion) {
-            return requestedVersion
-        }
-        return supportedProtocolVersions[0]
-    }
-
-    func sendToolErrorResult(id: Any?, message: String) {
+    func sendToolErrorResult(id: Any?, message: String, context: RequestContext) {
         let response: [String: Any] = [
             "content": [["type": "text", "text": message]],
+            "structuredContent": ["error": message],
             "isError": true
         ]
-        sendResult(id: id, result: response)
+        sendResult(id: id, result: response, context: context)
+    }
+
+    func structuredContent(from resultValue: Any, jsonText: String) -> Any? {
+        if JSONSerialization.isValidJSONObject(resultValue) {
+            return resultValue
+        }
+        if resultValue is NSNumber || resultValue is Bool || resultValue is NSNull {
+            return resultValue
+        }
+        if let data = jsonText.data(using: .utf8),
+           let parsed = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) {
+            return parsed
+        }
+        return jsonText
     }
 
     func buildToolsListResult(params: [String: Any]?) throws -> [String: Any] {
@@ -429,17 +553,7 @@ final class MCPServer {
 
         let end = min(start + pageSize, engine.tools.count)
         let page = Array(engine.tools[start..<end])
-        let toolEntries = page.map { tool -> [String: Any] in
-            var entry: [String: Any] = [
-                "name": tool.name,
-                "description": tool.description,
-                "inputSchema": tool.inputSchema
-            ]
-            if let annotations = tool.annotations {
-                entry["annotations"] = annotations
-            }
-            return entry
-        }
+        let toolEntries = page.map { $0.mcpListEntry() }
 
         var result: [String: Any] = ["tools": toolEntries]
         if end < engine.tools.count {
@@ -458,15 +572,44 @@ final class MCPServer {
 
     // MARK: - Transport
 
-    func sendResult(id: Any?, result: [String: Any]) {
+    func sendResult(id: Any?, result: [String: Any], context: RequestContext, cacheable: Bool = false) {
         guard let responseId = id else {
             return
+        }
+        var result = result
+        if context.era == .modern {
+            if result["resultType"] == nil {
+                result["resultType"] = "complete"
+            }
+            var meta = result["_meta"] as? [String: Any] ?? [:]
+            meta["io.modelcontextprotocol/serverInfo"] = serverInfoObject
+            result["_meta"] = meta
+            if cacheable {
+                if result["ttlMs"] == nil {
+                    result["ttlMs"] = listCacheTtlMs
+                }
+                if result["cacheScope"] == nil {
+                    result["cacheScope"] = "public"
+                }
+            }
         }
         send([
             "jsonrpc": "2.0",
             "id": responseId,
             "result": result
         ])
+    }
+
+    func sendUnsupportedProtocolVersion(id: Any?, requested: String) {
+        sendError(
+            id: id,
+            code: -32022,
+            message: "Unsupported protocol version",
+            data: [
+                "supported": supportedProtocolVersions,
+                "requested": requested
+            ]
+        )
     }
 
     func sendError(id: Any?, code: Int, message: String, data: Any? = nil) {
