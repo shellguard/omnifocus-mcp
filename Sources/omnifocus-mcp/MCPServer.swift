@@ -512,7 +512,7 @@ final class MCPServer {
     func sendToolErrorResult(id: Any?, message: String, context: RequestContext) {
         let response: [String: Any] = [
             "content": [["type": "text", "text": message]],
-            "structuredContent": ["error": message],
+            "structuredContent": ["message": message],
             "isError": true
         ]
         sendResult(id: id, result: response, context: context)
@@ -631,7 +631,7 @@ final class MCPServer {
     }
 
     func send(_ payload: [String: Any]) {
-        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: []) else {
+        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.withoutEscapingSlashes]) else {
             return
         }
         stdout.write(data)
