@@ -48,10 +48,13 @@ rpc_paged() {
   printf '%s\n' "$1" | OF_BACKEND=jxa OF_MCP_TOOLS_PAGE_SIZE=25 "$BINARY" 2>/dev/null
 }
 
-# Assert output contains an exact substring
+# Assert output contains an exact substring.
+# Uses a here-string (not `printf | grep`) so that when `grep -q` short-circuits
+# on an early match it cannot SIGPIPE an upstream writer — which, under
+# `set -o pipefail`, would otherwise be reported as a spurious failure.
 assert_contains() {
   local label="$1" output="$2" needle="$3"
-  if printf '%s' "$output" | grep -qF -- "$needle"; then
+  if grep -qF -- "$needle" <<<"$output"; then
     pass "$label"
   else
     fail "$label" "expected to find: $needle"
@@ -59,10 +62,10 @@ assert_contains() {
   fi
 }
 
-# Assert output does NOT contain an exact substring
+# Assert output does NOT contain an exact substring.
 assert_not_contains() {
   local label="$1" output="$2" needle="$3"
-  if printf '%s' "$output" | grep -qF -- "$needle"; then
+  if grep -qF -- "$needle" <<<"$output"; then
     fail "$label" "expected NOT to find: $needle"
     printf '    output: %s\n' "$output"
   else
